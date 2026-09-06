@@ -1220,26 +1220,6 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         });
     }
 
-    _createHeaderButton(iconName, onClicked) {
-        const button = new St.Button({
-            style_class: 'appindicator-overflow-item appindicator-overflow-manage-icon',
-            reactive: true,
-            can_focus: true,
-        });
-        const icon = new St.Icon({
-            icon_name: iconName,
-            style_class: 'popup-menu-icon',
-            x_align: Clutter.ActorAlign.CENTER,
-            y_align: Clutter.ActorAlign.CENTER,
-        });
-        if (button.set_child)
-            button.set_child(icon);
-        else
-            button.add_actor(icon);
-        button.connect('clicked', onClicked);
-        return button;
-    }
-
     showIconsPage() {
         this._manager.releaseEmbeddedIcons();
         this._iconsItem.visible = true;
@@ -1259,25 +1239,6 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         this._manager.releaseEmbeddedIcons();
         this._manageSection.removeAll();
         this._updateManageHeight();
-
-        const top = new PopupMenu.PopupBaseMenuItem({ activate: false });
-        top.add_style_class_name('appindicator-overflow-manage-header');
-        top.add_child(this._createHeaderButton('view-grid-symbolic', () =>
-            this._manager.setManaging(false)));
-        top.add_child(new St.Label({
-            text: _('Overflow list'),
-            x_expand: true,
-            y_align: Clutter.ActorAlign.CENTER,
-        }));
-        this._manageSection.addMenuItem(top);
-
-        const header = new PopupMenu.PopupMenuItem(
-            _('Click a name to open its menu, the eye to show or hide it, middle-click to forget one that is not running'), {
-                reactive: false,
-                activate: false,
-            });
-        header.setSensitive(false);
-        this._manageSection.addMenuItem(header);
 
         let entries = this._manager.listManagedEntries();
         const notRunning = entries.filter(entry => !entry.live).length;

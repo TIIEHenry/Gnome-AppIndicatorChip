@@ -21,6 +21,7 @@ gnome-extensions pack -f -o "$out_dir" \
   --extra-source=interfaces.js \
   --extra-source=overflowManager.js \
   --extra-source=pixmapsUtils.js \
+  --extra-source=prefsBackup.js \
   --extra-source=prefsBoxOrder.js \
   --extra-source=promiseUtils.js \
   --extra-source=settingsManager.js \

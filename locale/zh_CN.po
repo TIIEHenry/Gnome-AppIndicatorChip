@@ -102,6 +102,66 @@ msgstr "在托盘图标左侧"
 msgid "After the tray icons"
 msgstr "在托盘图标右侧"
 
+#: prefsBackup.js
+msgid "Backup"
+msgstr "备份"
+
+#: prefsBackup.js
+msgid "Save or restore every setting in this extension."
+msgstr "导出或导入本扩展的全部设置。"
+
+#: prefsBackup.js
+msgid "Export configuration"
+msgstr "导出配置"
+
+#: prefsBackup.js
+msgid "Save all settings to a JSON file"
+msgstr "把当前全部设置存成 JSON 文件"
+
+#: prefsBackup.js
+msgid "Export"
+msgstr "导出"
+
+#: prefsBackup.js
+msgid "Import configuration"
+msgstr "导入配置"
+
+#: prefsBackup.js
+msgid "Replace current settings from a JSON file"
+msgstr "用 JSON 文件覆盖当前设置"
+
+#: prefsBackup.js
+msgid "Import"
+msgstr "导入"
+
+#: prefsBackup.js
+msgid "JSON files"
+msgstr "JSON 文件"
+
+#: prefsBackup.js
+msgid "All files"
+msgstr "所有文件"
+
+#: prefsBackup.js
+msgid "Configuration exported"
+msgstr "已导出配置"
+
+#: prefsBackup.js
+msgid "Could not export configuration"
+msgstr "导出失败"
+
+#: prefsBackup.js
+msgid "Configuration imported. Reopen this window to refresh the pages."
+msgstr "已导入配置。请关掉再打开本窗口以刷新页面。"
+
+#: prefsBackup.js
+msgid "This file is not an AppIndicator backup"
+msgstr "这不是本扩展的配置文件"
+
+#: prefsBackup.js
+msgid "Could not import configuration"
+msgstr "导入失败"
+
 #: indicatorStatusIcon.js
 msgid "Show on the panel"
 msgstr "显示在面板"

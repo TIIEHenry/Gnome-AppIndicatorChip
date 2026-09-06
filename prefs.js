@@ -395,6 +395,8 @@ class AppIndicatorPreferences extends Gtk.Box {
             this.preferences_vbox.pack_start(this.icon_size_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.icon_spacing_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.tray_position_hbox, true, false, 0);
+            if (Me)
+                Me.imports.prefsBackup.attachBackupButtons(this.preferences_vbox, this._settings);
         }
 
         // Custom icons section
@@ -513,8 +515,16 @@ function fillPreferencesWindow(window) {
     window.add(Me.imports.prefsBoxOrder.buildItemOrderPage(settings));
 
     const built = new AppIndicatorPreferences();
-    window.add(_adwPage(_('Preferences'), 'emblem-system-symbolic',
-        built.preferences_vbox));
+    const prefsPage = new Adw.PreferencesPage({
+        title: _('Preferences'),
+        icon_name: 'emblem-system-symbolic',
+    });
+    prefsPage.add(Me.imports.prefsBackup.buildBackupGroup(settings, window));
+    const prefsGroup = new Adw.PreferencesGroup();
+    prefsGroup.add(built.preferences_vbox);
+    prefsPage.add(prefsGroup);
+    Me.imports.prefsBoxOrder.flattenInnerScrolls(prefsPage);
+    window.add(prefsPage);
     window.add(_adwPage(_('Custom Icons'), 'emblem-photos-symbolic',
         built.custom_icons_vbox));
 }
