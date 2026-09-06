@@ -277,6 +277,12 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
             return;
 
         const orders = this._readOrders();
+        const currentBox = BOXES.find(box => orders[box].includes(TRAY_SLOT));
+        if (currentBox === pos) {
+            this.apply();
+            return;
+        }
+
         BOXES.forEach(box => {
             orders[box] = orders[box].filter(slot => slot !== TRAY_SLOT);
         });

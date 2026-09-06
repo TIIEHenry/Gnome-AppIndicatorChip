@@ -53,14 +53,6 @@ function dropRow(value) {
     return value;
 }
 
-function readOrders(settings) {
-    const orders = {};
-    BOXES.forEach(box => {
-        orders[box] = settings.get_strv(`${box}-box-order`).slice();
-    });
-    return orders;
-}
-
 function writeOrders(settings, orders) {
     BOXES.forEach(box => {
         const next = orders[box];
@@ -77,21 +69,19 @@ function writeOrders(settings, orders) {
     }
 }
 
-function moveItem(settings, item, fromBox, toBox, toIndex) {
-    const orders = readOrders(settings);
-    const from = orders[fromBox].filter(entry => entry !== item);
-    const to = fromBox === toBox ? from : orders[toBox].filter(entry => entry !== item);
-    const index = Math.max(0, Math.min(toIndex, to.length));
-    to.splice(index, 0, item);
-    orders[fromBox] = fromBox === toBox ? to : from;
-    orders[toBox] = to;
-    writeOrders(settings, orders);
+function rowsOf(list) {
+    const rows = [];
+    for (let i = 0; ; i++) {
+        const row = list.get_row_at_index(i);
+        if (!row)
+            break;
+        rows.push(row);
+    }
+    return rows;
 }
 
-function forgetItem(settings, item, fromBox) {
-    const orders = readOrders(settings);
-    orders[fromBox] = orders[fromBox].filter(entry => entry !== item);
-    writeOrders(settings, orders);
+function itemRowsOf(list) {
+    return rowsOf(list).filter(row => row.item);
 }
 
 const BoxOrderRow = GObject.registerClass({
@@ -148,96 +138,173 @@ const BoxOrderRow = GObject.registerClass({
             actions: Gdk.DragAction.MOVE,
             formats: Gdk.ContentFormats.new_for_gtype(BoxOrderRow),
         });
-        drop.connect('drop', (_target, value) => {
+        drop.connect('drop', (_target, value, _x, y) => {
             const source = dropRow(value);
             if (!source || source === this || !this._controller)
                 return false;
-            this._controller.dropOnRow(source, this);
+            const after = typeof y === 'number' &&
+                y > this.get_allocated_height() / 2;
+            this._controller.dropOnRow(source, this, after);
             return true;
         });
         this.add_controller(drop);
+
+        const motion = new Gtk.DropControllerMotion();
+        motion.connect('motion', (_c, _x, y) => {
+            const after = y > this.get_allocated_height() / 2;
+            this.remove_css_class('appindicator-drop-before');
+            this.remove_css_class('appindicator-drop-after');
+            this.add_css_class(after
+                ? 'appindicator-drop-after'
+                : 'appindicator-drop-before');
+        });
+        motion.connect('leave', () => {
+            this.remove_css_class('appindicator-drop-before');
+            this.remove_css_class('appindicator-drop-after');
+        });
+        this.add_controller(motion);
     }
 });
 
-function bindGroups(settings, groups) {
+function makePlaceholder(controller, list) {
+    const row = new Adw.ActionRow({
+        title: _('Drop items here'),
+        activatable: false,
+        selectable: false,
+    });
+    row._placeholder = true;
+    const drop = new Gtk.DropTarget({
+        actions: Gdk.DragAction.MOVE,
+        formats: Gdk.ContentFormats.new_for_gtype(BoxOrderRow),
+    });
+    drop.connect('drop', (_target, value) => {
+        const source = dropRow(value);
+        if (!source || source._placeholder)
+            return false;
+        controller.dropOnList(source, list, 0);
+        return true;
+    });
+    row.add_controller(drop);
+    return row;
+}
+
+function installListDrop(controller, list) {
+    const drop = new Gtk.DropTarget({
+        actions: Gdk.DragAction.MOVE,
+        formats: Gdk.ContentFormats.new_for_gtype(BoxOrderRow),
+    });
+    drop.connect('drop', (_target, value) => {
+        const source = dropRow(value);
+        if (!source || source._placeholder)
+            return false;
+        controller.dropOnList(source, list, -1);
+        return true;
+    });
+    list.add_controller(drop);
+}
+
+function bindLists(settings, lists) {
     const controller = {
         _saving: false,
-        boxOfRow(row) {
-            return row._box;
-        },
-        dropOnRow(source, target) {
-            const fromBox = source._box;
-            const toBox = target._box;
-            let toIndex = settings.get_strv(`${toBox}-box-order`).indexOf(target.item);
-            if (toIndex < 0)
-                toIndex = settings.get_strv(`${toBox}-box-order`).length;
-            if (fromBox === toBox) {
-                const fromIndex = settings.get_strv(`${fromBox}-box-order`).indexOf(source.item);
-                if (fromIndex >= 0 && fromIndex < toIndex)
-                    toIndex -= 1;
-            }
-            if (fromBox !== toBox &&
-                (fromBox === 'left' && toBox !== 'left' ||
-                 fromBox === 'center' && toBox === 'right'))
-                toIndex += 1;
+        save() {
+            const orders = {};
+            BOXES.forEach(box => {
+                orders[box] = itemRowsOf(lists[box]).map(row => row.item);
+            });
             this._saving = true;
             try {
-                moveItem(settings, source.item, fromBox, toBox, toIndex);
+                writeOrders(settings, orders);
             } finally {
                 this._saving = false;
             }
-            this.reload();
+        },
+        refreshPlaceholders() {
+            BOXES.forEach(box => {
+                const list = lists[box];
+                const items = itemRowsOf(list);
+                if (!items.length && !list._placeholder) {
+                    list._placeholder = makePlaceholder(this, list);
+                    list.append(list._placeholder);
+                } else if (items.length && list._placeholder) {
+                    list.remove(list._placeholder);
+                    list._placeholder.destroy();
+                    list._placeholder = null;
+                }
+            });
+        },
+        dropOnRow(source, target, after) {
+            if (!source || !target || source === target || source._placeholder)
+                return;
+            if (target._placeholder) {
+                this.dropOnList(source, target.get_parent(), 0);
+                return;
+            }
+            const targetList = target.get_parent();
+            if (!targetList)
+                return;
+            let index = target.get_index();
+            if (after)
+                index += 1;
+            this.dropOnList(source, targetList, index);
+        },
+        dropOnList(source, list, index) {
+            if (!source || !list || source._placeholder)
+                return;
+            const sourceList = source.get_parent();
+            if (sourceList === list) {
+                const current = source.get_index();
+                if (index < 0)
+                    index = itemRowsOf(list).length;
+                if (index === current || index === current + 1)
+                    return;
+                sourceList.remove(source);
+                if (current < index)
+                    index -= 1;
+                list.insert(source, index);
+            } else {
+                if (sourceList)
+                    sourceList.remove(source);
+                if (index < 0)
+                    list.append(source);
+                else
+                    list.insert(source, index);
+            }
+            source._box = list._box;
+            this.refreshPlaceholders();
+            this.save();
         },
         dropOnGroup(source, toBox) {
-            this._saving = true;
-            try {
-                moveItem(settings, source.item, source._box, toBox, 0);
-            } finally {
-                this._saving = false;
-            }
-            this.reload();
+            this.dropOnList(source, lists[toBox], 0);
         },
         forgetRow(row) {
-            this._saving = true;
-            try {
-                forgetItem(settings, row.item, row._box);
-            } finally {
-                this._saving = false;
-            }
-            this.reload();
+            const list = row.get_parent();
+            if (list)
+                list.remove(row);
+            row.destroy();
+            this.refreshPlaceholders();
+            this.save();
         },
         reload() {
             BOXES.forEach(box => {
-                const group = groups[box];
-                (group._orderRows || []).slice().forEach(row => {
-                    group.remove(row);
+                const list = lists[box];
+                rowsOf(list).forEach(row => {
+                    list.remove(row);
                     row.destroy();
                 });
-                group._orderRows = [];
+                list._placeholder = null;
                 settings.get_strv(`${box}-box-order`).forEach(item => {
                     const row = new BoxOrderRow(item);
                     row._box = box;
                     row._controller = controller;
-                    group.add(row);
-                    group._orderRows.push(row);
+                    list.append(row);
                 });
             });
+            this.refreshPlaceholders();
         },
     };
 
     BOXES.forEach(box => {
-        const drop = new Gtk.DropTarget({
-            actions: Gdk.DragAction.MOVE,
-            formats: Gdk.ContentFormats.new_for_gtype(BoxOrderRow),
-        });
-        drop.connect('drop', (_target, value) => {
-            const source = dropRow(value);
-            if (!source)
-                return false;
-            controller.dropOnGroup(source, box);
-            return true;
-        });
-        groups[box].add_controller(drop);
+        installListDrop(controller, lists[box]);
     });
 
     controller.reload();
@@ -325,24 +392,67 @@ function startEdgeScroll(page) {
     });
 }
 
+function installPrefsCss() {
+    if (installPrefsCss._done)
+        return;
+    installPrefsCss._done = true;
+    const css = new Gtk.CssProvider();
+    const data =
+        '.appindicator-drop-before { box-shadow: inset 0 2px 0 #3584e4; }' +
+        '.appindicator-drop-after { box-shadow: inset 0 -2px 0 #3584e4; }' +
+        '.appindicator-box-order-list { min-height: 36px; }';
+    try {
+        css.load_from_data(data, -1);
+    } catch (e) {
+        css.load_from_data(new TextEncoder().encode(data));
+    }
+    Gtk.StyleContext.add_provider_for_display(
+        Gdk.Display.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION);
+}
+
 function buildGtk4Page(settings) {
+    installPrefsCss();
     const page = new Adw.PreferencesPage({
         title: _('Item Order'),
         icon_name: 'view-list-symbolic',
     });
 
+    const lists = {};
     const groups = {};
     BOXES.forEach(box => {
-        groups[box] = new Adw.PreferencesGroup({
+        const group = new Adw.PreferencesGroup({
             title: BOX_TITLES[box],
             description: box === 'left'
                 ? _('Simply use drag and drop to order the items any way you want. The tray chip and its icons move as one item.')
                 : '',
         });
-        page.add(groups[box]);
+        const list = new Gtk.ListBox({
+            selection_mode: Gtk.SelectionMode.NONE,
+        });
+        list.add_css_class('boxed-list');
+        list.add_css_class('appindicator-box-order-list');
+        list._box = box;
+        lists[box] = list;
+        groups[box] = group;
+        group.add(list);
+        page.add(group);
     });
 
-    const controller = bindGroups(settings, groups);
+    const controller = bindLists(settings, lists);
+    BOXES.forEach(box => {
+        const drop = new Gtk.DropTarget({
+            actions: Gdk.DragAction.MOVE,
+            formats: Gdk.ContentFormats.new_for_gtype(BoxOrderRow),
+        });
+        drop.connect('drop', (_target, value) => {
+            const source = dropRow(value);
+            if (!source)
+                return false;
+            controller.dropOnGroup(source, box);
+            return true;
+        });
+        groups[box].add_controller(drop);
+    });
     BOXES.forEach(box => {
         settings.connect(`changed::${box}-box-order`, () => {
             if (!controller._saving)
