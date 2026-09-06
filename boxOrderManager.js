@@ -16,6 +16,7 @@
 
 /* exported BoxOrderManager, TRAY_SLOT, isTrayRole */
 
+const Clutter = imports.gi.Clutter;
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 
@@ -99,8 +100,8 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
         this._applying = true;
         try {
             this._adoptNewSlots();
-            this._applyAllBoxes();
-            this._relayoutLegacyIcons();
+            if (this._applyAllBoxes())
+                this._relayoutLegacyIcons();
         } finally {
             this._applying = false;
         }
@@ -124,16 +125,25 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
     _actorsOf(indicator) {
         if (!indicator)
             return [];
-        return [indicator.container, indicator.actor, indicator].filter(actor => !!actor);
+
+        // Every actor carries an "actor" property that only logs a deprecation
+        // warning and hands back the actor itself, so it is read for the older
+        // indicators that really do keep their actor beside them.
+        if (indicator instanceof Clutter.Actor)
+            return [indicator.container, indicator].filter(actor => !!actor);
+        return [indicator.container, indicator.actor].filter(actor => !!actor);
     }
 
-    _roleForActor(actor) {
+    _rolesByActor() {
+        const roles = new Map();
         const statusArea = Main.panel.statusArea;
         for (const role in statusArea) {
-            if (this._actorsOf(statusArea[role]).includes(actor))
-                return role;
+            this._actorsOf(statusArea[role]).forEach(actor => {
+                if (!roles.has(actor))
+                    roles.set(actor, role);
+            });
         }
-        return null;
+        return roles;
     }
 
     _actorForSlot(slot) {
@@ -154,11 +164,11 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
         return isTrayRole(role) ? TRAY_SLOT : role;
     }
 
-    _presentSlots(boxName) {
+    _presentSlots(boxName, roles) {
         const seen = new Set();
         const slots = [];
         for (const actor of panelBox(boxName).get_children()) {
-            const slot = this._slotForRole(this._roleForActor(actor));
+            const slot = this._slotForRole(roles.get(actor));
             if (!slot || seen.has(slot))
                 continue;
             seen.add(slot);
@@ -235,8 +245,9 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
 
     _adoptNewSlots() {
         const orders = this._readOrders();
+        const roles = this._rolesByActor();
         BOXES.forEach(box => {
-            const present = this._presentSlots(box);
+            const present = this._presentSlots(box, roles);
             present.forEach(slot => {
                 if (this._slotInOrders(orders, slot))
                     return;
@@ -312,8 +323,8 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
 
     _applyAllBoxes() {
         if (!isUserSession())
-            return;
-        BOXES.forEach(box => this._applyBox(box));
+            return false;
+        return BOXES.map(box => this._applyBox(box)).includes(true);
     }
 
     _applyBox(boxName) {
@@ -335,9 +346,25 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
                 addActor(this._actorForSlot(slot));
         });
 
+        // The ordered actors end up as one run at the edge the box fills from,
+        // so a box that already reads that way is left untouched: reshuffling
+        // it anyway would relayout the whole panel on every panel change.
+        const children = target.get_children();
+        const start = boxName === 'right' ? children.length - actors.length : 0;
+        if (start >= 0 && actors.every((actor, i) => children[start + i] === actor))
+            return false;
+
         const visibility = actors.map(actor => actor.visible);
         actors.forEach((actor, i) => {
             const parent = actor.get_parent();
+
+            // Moving a child inside its own box never detaches it, which keeps
+            // the box from announcing a removal and an addition for every icon.
+            if (parent === target) {
+                target.set_child_at_index(actor, boxName === 'right' ? -1 : i);
+                return;
+            }
+
             if (parent)
                 parent.remove_child(actor);
             if (boxName === 'right')
@@ -347,6 +374,7 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
             if (!visibility[i])
                 actor.hide();
         });
+        return true;
     }
 
     _relayoutLegacyIcons() {

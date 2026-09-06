@@ -172,6 +172,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         this._settings = SettingsManager.getDefaultGSettings();
         this._managing = false;
         this._prepared = false;
+        this._gridGeometry = null;
         this._menuSourceIcon = null;
         this._parkedMenuSource = null;
         this._onlyRunning = this._settings.get_boolean('overflow-manage-only-running');
@@ -537,6 +538,15 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     _relayoutHiddenIcons() {
         const icons = this._hiddenIcons().filter(icon =>
             icon !== this._parkedMenuSource && icon !== this._menuSourceIcon);
+
+        // Rebuilding hands the popup a fresh set of cells that the shell has to
+        // map and lay out again while it is on screen, so a grid that already
+        // shows these icons at this size is kept as it is.
+        const geometry = `${this._cellSize * this._scaleFactor()}:${this._overflowIconSize}`;
+        if (this._gridGeometry === geometry && this._gridShows(icons))
+            return;
+        this._gridGeometry = geometry;
+
         this._unparentHiddenIcons();
         this._unparent(this._emptyLabel);
 
@@ -554,6 +564,16 @@ var OverflowManager = class AppIndicatorsOverflowManager {
             this._unparent(actor);
             this._gridLayout.attach(this._wrapOverflowCell(actor), col, row, 1, 1);
         });
+    }
+
+    _gridShows(icons) {
+        const cells = this._hiddenGrid.get_children();
+        if (!icons.length)
+            return cells.length === 1 && cells[0] === this._emptyLabel;
+        if (cells.length !== icons.length)
+            return false;
+        return icons.every((icon, i) =>
+            cells[i].get_child && cells[i].get_child() === panelActor(icon));
     }
 
     _wrapOverflowCell(actor) {
