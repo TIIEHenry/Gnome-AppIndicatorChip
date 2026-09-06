@@ -1,0 +1,12 @@
+{
+  "description": "Adds AppIndicator, KStatusNotifierItem and legacy Tray icons support to the Shell, with a Windows-style tray overflow whose panel entry shows the CPU and memory load",
+  "gettext-domain": "AppIndicatorExtension",
+  "name": "AppIndicator Chip",
+  "settings-schema": "org.gnome.shell.extensions.appindicator-overflow",
+  "shell-version": [
+    "42"
+  ],
+  "url": "https://github.com/TIIEHenry/Gnome-AppIndicatorChip",
+  "uuid": "appindicator-overflow@tiiehenry.github.io",
+  "version": 53
+}

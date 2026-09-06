@@ -1,0 +1,78 @@
+.panel-button.appindicator-button .appindicator-icon,
+.panel-button.appindicator-button .system-status-icon,
+.panel-button.appindicator-button .status-notifier-icon {
+    padding: 0;
+    margin: 0;
+}
+
+.appindicator-overflow-box {
+    padding: 8px;
+}
+
+/* Cell and icon sizes are set from JavaScript so that a single place decides
+   them; the rules here only cover the looks. */
+.appindicator-overflow-box .appindicator-overflow-item,
+.appindicator-overflow-item {
+    border-radius: 99px;
+    padding: 0;
+    margin: 0;
+    transition-duration: 100ms;
+}
+
+.appindicator-overflow-box .appindicator-overflow-item .system-status-icon,
+.appindicator-overflow-box .appindicator-overflow-item .appindicator-icon,
+.appindicator-overflow-box .appindicator-overflow-item .status-notifier-icon {
+    padding: 0;
+    margin: 0;
+}
+
+/* Mid grey reads as a highlight on both light and dark popup backgrounds. */
+.appindicator-overflow-box .appindicator-overflow-item:hover,
+.appindicator-overflow-item:hover {
+    background-color: rgba(127, 127, 127, 0.25);
+}
+
+.appindicator-overflow-box .appindicator-overflow-item:active,
+.appindicator-overflow-box .appindicator-overflow-item:checked,
+.appindicator-overflow-item:active,
+.appindicator-overflow-item:checked {
+    background-color: rgba(127, 127, 127, 0.5);
+}
+
+.appindicator-overflow-empty {
+    padding: 6px 10px;
+    color: #ccc;
+}
+
+.appindicator-overflow-manage {
+    min-width: 260px;
+}
+
+.appindicator-overflow-manage-icon {
+    width: 36px;
+    height: 36px;
+}
+
+.appindicator-overflow-manage-header {
+    min-width: 260px;
+}
+
+.appindicator-overflow-list-icon {
+    padding: 0;
+    margin: 0;
+}
+
+.appindicator-order-btn {
+    min-width: 22px;
+    padding: 4px 6px;
+    border-radius: 99px;
+    transition-duration: 100ms;
+}
+
+.appindicator-order-btn:hover {
+    background-color: rgba(127, 127, 127, 0.25);
+}
+
+.appindicator-order-btn:active {
+    background-color: rgba(127, 127, 127, 0.5);
+}

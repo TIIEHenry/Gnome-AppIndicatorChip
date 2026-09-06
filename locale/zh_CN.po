@@ -1,0 +1,132 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: TopIcons-Plus master\n"
+"Report-Msgid-Bugs-To: \n"
+"PO-Revision-Date: 2026-09-06 08:00+0800\n"
+"Last-Translator: Dingzhong Chen <wsxy162@gmail.com>\n"
+"Language-Team: \n"
+"Language: zh_CN\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "Brightness (min: -1.0, max: 1.0)"
+msgstr "亮度（最低：-1.0，最高：1.0）"
+
+msgid "Center"
+msgstr "居中"
+
+msgid "Contrast (min: -1.0, max: 1.0)"
+msgstr "对比度（最低：-1.0，最高：1.0）"
+
+msgid "Desaturation (min: 0.0, max: 1.0)"
+msgstr "饱和度（最低：0.0，最高：1.0）"
+
+msgid "Icon size (min: 0, max: 96)"
+msgstr "图标大小（最小：0，最大：96）"
+
+msgid "Left"
+msgstr "左对齐"
+
+msgid "Opacity (min: 0, max: 255)"
+msgstr "不透明度（最低：0，最高：255）"
+
+msgid "Right"
+msgstr "右对齐"
+
+msgid "Tray horizontal alignment"
+msgstr "托盘水平对齐方式"
+
+#: prefs.js
+msgid "Icon spacing (min: 0, max: 24)"
+msgstr "图标间距（最小：0，最大：24）"
+
+#: prefs.js
+msgid "Enable tray overflow (Windows-style)"
+msgstr "启用托盘收纳（类 Windows）"
+
+#: prefs.js
+msgid "Hide new tray icons until pinned"
+msgstr "新出现的托盘图标先收纳"
+
+#: prefs.js
+msgid "Overflow entry position"
+msgstr "收纳入口位置"
+
+#: prefs.js
+msgid "Before the tray icons"
+msgstr "在托盘图标左侧"
+
+#: prefs.js
+msgid "After the tray icons"
+msgstr "在托盘图标右侧"
+
+#: indicatorStatusIcon.js
+msgid "Show on the panel"
+msgstr "显示在面板"
+
+#: indicatorStatusIcon.js
+msgid "Move into the overflow"
+msgstr "收纳到箭头里"
+
+#: overflowManager.js
+msgid "Tray overflow"
+msgstr "托盘收纳"
+
+#: overflowManager.js
+msgid "Unknown icon"
+msgstr "未知图标"
+
+#: overflowManager.js
+msgid "No icons in the overflow"
+msgstr "没有已收纳的图标"
+
+#: overflowManager.js
+msgid "Manage tray icons…"
+msgstr "管理托盘图标…"
+
+#: overflowManager.js
+msgid "Overflow list"
+msgstr "收纳列表"
+
+#: overflowManager.js
+msgid "Click a name to open its menu, click the eye to show or hide it"
+msgstr "点名称打开菜单，点眼睛图标切换显示或收纳"
+
+#: overflowManager.js
+msgid "Only show running"
+msgstr "只显示运行中"
+
+#. Whether the "only show running" filter is enabled
+#: overflowManager.js
+msgid "On"
+msgstr "开"
+
+#. Whether the "only show running" filter is enabled
+#: overflowManager.js
+msgid "Off"
+msgstr "关"
+
+#: overflowManager.js
+msgid "No tray icon is running"
+msgstr "没有正在运行的托盘图标"
+
+#: overflowManager.js
+msgid "No tray icon yet"
+msgstr "还没有托盘图标"
+
+#. Suffix for a remembered tray icon whose application is not running
+#: overflowManager.js
+msgid "(not running)"
+msgstr "（未运行）"
+
+#. The tray icon is shown on the panel
+#: overflowManager.js
+msgid "Panel"
+msgstr "面板"
+
+#. The tray icon is hidden in the overflow
+#: overflowManager.js
+msgid "Overflow"
+msgstr "收纳"
