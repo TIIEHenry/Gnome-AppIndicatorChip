@@ -20,7 +20,7 @@
 }
 
 .panel-button.appindicator-button .appindicator-icon-box {
-    padding: 4px;
+    padding: 8px;
     border-radius: 99px;
     transition-duration: 100ms;
 }

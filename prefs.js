@@ -1,6 +1,6 @@
 // -*- mode: js2; indent-tabs-mode: nil; js2-basic-offset: 4 -*-
 
-/* exported init, buildPrefsWidget */
+/* exported init, buildPrefsWidget, fillPreferencesWindow */
 
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
@@ -21,6 +21,7 @@ try {
 
 const GObject = imports.gi.GObject;
 const Gtk = imports.gi.Gtk;
+const Adw = imports.gi.Adw;
 
 const ExtensionUtils = imports.misc.extensionUtils;
 const Me = ExtensionUtils.getCurrentExtension();
@@ -491,25 +492,42 @@ class AppIndicatorPreferences extends Gtk.Box {
             }
         });
 
-        this.notebook = new Gtk.Notebook();
-        this.notebook.append_page(this.preferences_vbox,
-            new Gtk.Label({ label: _('Preferences') }));
-        this.notebook.append_page(this.custom_icons_vbox,
-            new Gtk.Label({ label: _('Custom Icons') }));
-
-        if (imports.gi.versions.Gtk === '4.0')
-            this.append(this.notebook);
-        else
-            this.add(this.notebook);
     }
 });
 
-function buildPrefsWidget() {
-    let widget = new AppIndicatorPreferences();
+function _adwPage(title, iconName, child) {
+    const page = new Adw.PreferencesPage({
+        title,
+        icon_name: iconName,
+    });
+    const group = new Adw.PreferencesGroup();
+    group.add(child);
+    page.add(group);
+    Me.imports.prefsBoxOrder.flattenInnerScrolls(page);
+    return page;
+}
 
+function fillPreferencesWindow(window) {
+    const settings = ExtensionUtils.getSettings();
+    window.set_default_size(620, 700);
+    window.add(Me.imports.prefsBoxOrder.buildItemOrderPage(settings));
+
+    const built = new AppIndicatorPreferences();
+    window.add(_adwPage(_('Preferences'), 'emblem-system-symbolic',
+        built.preferences_vbox));
+    window.add(_adwPage(_('Custom Icons'), 'emblem-photos-symbolic',
+        built.custom_icons_vbox));
+}
+
+function buildPrefsWidget() {
+    const settings = Me ? ExtensionUtils.getSettings()
+        : new Gio.Settings({ schema_id: 'org.gnome.shell.extensions.appindicator-overflow' });
+    if (Me)
+        return Me.imports.prefsBoxOrder.buildItemOrderPage(settings);
+
+    let widget = new AppIndicatorPreferences();
     if (widget.show_all)
         widget.show_all();
-
     return widget;
 }
 

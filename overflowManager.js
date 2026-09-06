@@ -674,7 +674,38 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         this._applyOverflowBoxOrder();
     }
 
+    trayGroupActors() {
+        const panelBoxes = [Main.panel._leftBox, Main.panel._centerBox,
+            Main.panel._rightBox];
+        const inPanel = actor => actor && panelBoxes.includes(actor.get_parent());
+        const pinned = this.orderedKeys()
+            .flatMap(key => this._iconsForKey(key))
+            .filter(icon => !this.isHidden(icon))
+            .map(icon => panelActor(icon))
+            .filter(inPanel);
+        const buttonActor = this._button ? panelActor(this._button) : null;
+        const button = inPanel(buttonActor) ? [buttonActor] : [];
+        if (!pinned.length && !button.length)
+            return [];
+        return this._settings.get_string('overflow-button-side') === 'end'
+            ? [...pinned, ...button] : [...button, ...pinned];
+    }
+
+    queueLegacyRelayout() {
+        this.orderedKeys()
+            .flatMap(key => this._iconsForKey(key))
+            .filter(icon => !this.isHidden(icon) && icon._icon)
+            .forEach(icon => icon._icon.queue_relayout());
+    }
+
     _applyPanelOrder() {
+        const BoxOrderManager = Extension.imports.boxOrderManager.BoxOrderManager;
+        const boxOrder = BoxOrderManager.peek();
+        if (boxOrder) {
+            boxOrder.apply();
+            return;
+        }
+
         if (!this._button)
             return;
 

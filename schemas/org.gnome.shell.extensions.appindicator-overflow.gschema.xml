@@ -26,8 +26,8 @@
       <description>Icon size in pixel</description>
     </key>
     <key name="icon-spacing" type="i">
-      <!-- Smaller than upstream on purpose: the hover highlight is drawn by the
-           box around the icon, which already adds padding of its own. -->
+      <!-- Hover highlight is drawn by the box around the icon, which already
+           adds padding of its own. -->
       <default>2</default>
       <summary>Icon spacing</summary>
       <description>Icon spacing within the tray</description>
@@ -86,6 +86,25 @@
     <key name="overflow-manage-only-running" type="b">
       <default>true</default>
       <summary>Only show running tray icons in manager</summary>
+    </key>
+    <key name="left-box-order" type="as">
+      <default>[]</default>
+      <summary>Left top bar box order</summary>
+      <description>Roles in the left panel box. The tray chip and its icons share the single id appindicator-overflow.</description>
+    </key>
+    <key name="center-box-order" type="as">
+      <default>[]</default>
+      <summary>Center top bar box order</summary>
+      <description>Roles in the center panel box. The tray chip and its icons share the single id appindicator-overflow.</description>
+    </key>
+    <key name="right-box-order" type="as">
+      <default>[]</default>
+      <summary>Right top bar box order</summary>
+      <description>Roles in the right panel box. The tray chip and its icons share the single id appindicator-overflow.</description>
+    </key>
+    <key name="box-order-migrated" type="b">
+      <default>false</default>
+      <summary>Migrated order from Top Bar Organizer</summary>
     </key>
   </schema>
 </schemalist>

@@ -38,6 +38,42 @@ msgstr "右对齐"
 msgid "Tray horizontal alignment"
 msgstr "托盘水平对齐方式"
 
+#: prefs.js prefsBoxOrder.js
+msgid "Item Order"
+msgstr "顶栏排序"
+
+#: prefsBoxOrder.js
+msgid "Left Top Bar Box"
+msgstr "Left Top Bar Box"
+
+#: prefsBoxOrder.js
+msgid "Center Top Bar Box"
+msgstr "Center Top Bar Box"
+
+#: prefsBoxOrder.js
+msgid "Right Top Bar Box"
+msgstr "Right Top Bar Box"
+
+#: prefsBoxOrder.js
+msgid "Simply use drag and drop to order the items any way you want. The tray chip and its icons move as one item."
+msgstr "用拖拽排列顶栏条目。芯片和托盘小图标是一项，一起移动。"
+
+#: prefsBoxOrder.js
+msgid "Tray (overflow + icons)"
+msgstr "托盘（收纳 + 小图标）"
+
+#: prefsBoxOrder.js
+msgid "Forget"
+msgstr "Forget"
+
+#: prefsBoxOrder.js
+msgid "Drop items here"
+msgstr "拖到这里"
+
+#: prefsBoxOrder.js
+msgid "Item Order is available in GNOME 42 settings (GTK 4)."
+msgstr "顶栏排序请在 GNOME 42 的设置页（GTK 4）里使用。"
+
 #: prefs.js
 msgid "Icon spacing (min: 0, max: 24)"
 msgstr "图标间距（最小：0，最大：24）"

@@ -1,4 +1,4 @@
-# Gnome-AppIndicatorChip
+# AppIndicator
 
 A fork of [gnome-shell-extension-appindicator](https://github.com/ubuntu/gnome-shell-extension-appindicator) (v53) that adds a Windows-style tray overflow, with a panel entry that doubles as a CPU and memory readout.
 
@@ -11,6 +11,7 @@ A fork of [gnome-shell-extension-appindicator](https://github.com/ubuntu/gnome-s
   [simple-system-monitor](https://github.com/lgiki/gnome-shell-extension-simple-system-monitor)，读取 `/proc/stat` 与 `/proc/meminfo`，每 2 秒刷新。
 - **管理列表**：右键收纳入口直接进入管理页，可以用眼睛图标切换某个图标显示在面板还是收纳起来，用上下箭头调整顺序。标着「未运行」的条目中键点一下就能从记录里删掉。
 - **入口位置可选**：收纳入口可以放在托盘图标组的左侧或右侧。
+- **顶栏排序**：设置里的 Item Order 页沿用 Top Bar Organizer 的三栏拖拽。芯片和所有托盘小图标是一行 Tray，组内钉住 / 收纳仍在芯片的管理页。请先停用 Top Bar Organizer，两套排序会抢同一条顶栏。若本机装过 Organizer，第一次启用会把它的三栏顺序读过来，所有 `appindicator-*` 条目收成这一行。
 
 ## 安装
 
@@ -26,7 +27,7 @@ gnome-extensions enable appindicator-overflow@tiiehenry.github.io
 
 ## 设置
 
-打开扩展设置即可调整收纳开关、新图标是否默认收纳、收纳入口位置，以及上游原有的图标大小、间距、透明度等选项。
+打开扩展设置：第一页 Item Order 用拖拽排列左 / 中 / 右栏；Preferences 页调整收纳开关、新图标是否默认收纳、收纳入口位置，以及上游原有的图标大小、间距、透明度等选项。芯片右键进入管理页，只处理托盘组内部。
 
 ## 许可
 

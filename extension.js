@@ -22,6 +22,7 @@ const Extension = ExtensionUtils.getCurrentExtension();
 const StatusNotifierWatcher = Extension.imports.statusNotifierWatcher;
 const TrayIconsManager = Extension.imports.trayIconsManager;
 const OverflowManager = Extension.imports.overflowManager;
+const BoxOrderManager = Extension.imports.boxOrderManager;
 const Util = Extension.imports.util;
 
 let statusNotifierWatcher = null;
@@ -61,12 +62,14 @@ function enable() {
     isEnabled = true;
     Util.tryCleanupOldIndicators();
     OverflowManager.OverflowManager.getDefault();
+    BoxOrderManager.BoxOrderManager.getDefault();
     maybeEnableAfterNameAvailable();
     TrayIconsManager.TrayIconsManager.initialize();
 }
 
 function disable() {
     isEnabled = false;
+    BoxOrderManager.BoxOrderManager.destroy();
     TrayIconsManager.TrayIconsManager.destroy();
     if (statusNotifierWatcher !== null) {
         statusNotifierWatcher.destroy();
