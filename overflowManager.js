@@ -5,6 +5,8 @@ const GLib = imports.gi.GLib;
 const GObject = imports.gi.GObject;
 const St = imports.gi.St;
 
+const Shell = imports.gi.Shell;
+
 const Main = imports.ui.main;
 const PanelMenu = imports.ui.panelMenu;
 const PopupMenu = imports.ui.popupMenu;
@@ -40,18 +42,69 @@ let overflowManager;
 // The key identifies an application rather than a single icon, so that a
 // pinned application stays pinned across restarts. It is cached because it has
 // to stay stable for the whole lifetime of an icon, including while the icon is
-// being destroyed and its actor is already gone.
+// being destroyed and its actor is already gone. A D-Bus icon only learns its
+// application id once its proxy is ready, so until then it answers with its bus
+// name and nothing is cached: caching there would pin the icon under a name
+// that is gone the next time the application starts. The same holds while a
+// volatile id still waits for the title that stands in for it, since title
+// changes are applied in batches and can arrive after the id.
 function overflowKey(statusIcon) {
-    if (!statusIcon._overflowKey) {
-        if (statusIcon._indicator && statusIcon._indicator.id)
-            statusIcon._overflowKey = String(statusIcon._indicator.id);
-        else if (statusIcon.icon && statusIcon.icon.wm_class)
-            statusIcon._overflowKey = `legacy:${statusIcon.icon.wm_class}`;
-        else
-            statusIcon._overflowKey = statusIcon.uniqueId;
+    if (statusIcon._overflowKey)
+        return statusIcon._overflowKey;
+
+    const indicator = statusIcon._indicator;
+    if (indicator) {
+        const id = String(indicator.id || '');
+        if (id && (indicator.title || !isVolatileKey(id)))
+            statusIcon._overflowKey = stableKey(id, indicator.title);
+    } else if (statusIcon.icon && statusIcon.icon.wm_class) {
+        // An XEmbed icon shares the namespace with the D-Bus ones on purpose.
+        // While the shell restarts there is no watcher to talk to, so an
+        // application falls back to XEmbed under a window class equal to the id
+        // it uses on D-Bus, and both are then the very same application.
+        statusIcon._overflowKey = stableKey(statusIcon.icon.wm_class, statusIcon.icon.title);
     }
 
-    return statusIcon._overflowKey;
+    return statusIcon._overflowKey || statusIcon.uniqueId;
+}
+
+// An XEmbed icon is an X window belonging to the application, and it only ever
+// reacts to a click the pointer really made on it: the synthesised one the
+// shell can send instead is dropped by Qt and Chromium alike. Inside a popup
+// the menu takes over the input of the whole screen, so no real click can get
+// there, which leaves the panel as the only place such an icon works.
+function isPanelOnly(statusIcon) {
+    return statusIcon instanceof IndicatorStatusIcon.IndicatorStatusTrayIcon;
+}
+
+// A bus name dies with the process that owned it, so an icon remembered under
+// one can never be recognised again. An item registering under a well known
+// name builds it from its process id, which makes that name just as short
+// lived as a unique one.
+function isTransientKey(key) {
+    return /^:\d+\.\d+@/.test(key) ||
+        /^org\.(kde|freedesktop)\.StatusNotifierItem-\d+-\d+/.test(key);
+}
+
+// An application that does not name its tray gets a name made up from its
+// process: Tauri's tray-icon library for one calls it "tray app <pid>-<n>". A
+// number this long is that process id, and it is different on every start.
+function isVolatileKey(key) {
+    return /\d{4,}/.test(key);
+}
+
+// The title of an icon survives a restart of its application, so it identifies
+// the application where a volatile key cannot. Without a usable title, drop the
+// numbers instead, which at least keeps all icons of that kind under one key
+// rather than adding one per restart.
+function stableKey(key, title) {
+    if (!isVolatileKey(key))
+        return key;
+
+    if (title && !isVolatileKey(title))
+        return title;
+
+    return key.replace(/\d+/g, '').replace(/[\s:_-]+$/, '') || key;
 }
 
 function formatUsage(usage, unit) {
@@ -68,15 +121,27 @@ function displayName(statusIcon, key) {
             return String(statusIcon._indicator.id).replace(/^tray-icon tray app /, '');
     }
 
-    if (statusIcon && statusIcon.icon && statusIcon.icon.wm_class)
-        return statusIcon.icon.wm_class;
+    if (statusIcon && statusIcon.icon) {
+        if (statusIcon.icon.wm_class && !isVolatileKey(statusIcon.icon.wm_class))
+            return statusIcon.icon.wm_class;
+        if (statusIcon.icon.title)
+            return statusIcon.icon.title;
+    }
 
-    return String(key || '').replace(/^tray-icon tray app /, '').replace(/^legacy:/, '') ||
-        _('Unknown icon');
+    return String(key || '').replace(/^tray-icon tray app /, '') || _('Unknown icon');
 }
 
 function placeIcon(statusIcon) {
     OverflowManager.getDefault().register(statusIcon);
+}
+
+function openSystemMonitor() {
+    const appSystem = Shell.AppSystem.get_default();
+    const app = appSystem.lookup_app('gnome-system-monitor.desktop') ||
+        appSystem.lookup_app('org.gnome.Usage.desktop');
+
+    if (app)
+        app.activate();
 }
 
 var OverflowManager = class AppIndicatorsOverflowManager {
@@ -106,6 +171,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         this._icons = new Map();
         this._settings = SettingsManager.getDefaultGSettings();
         this._managing = false;
+        this._prepared = false;
         this._menuSourceIcon = null;
         this._parkedMenuSource = null;
         this._onlyRunning = this._settings.get_boolean('overflow-manage-only-running');
@@ -113,7 +179,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         // that every cell keeps the same size on HiDPI displays.
         this._iconsPerRow = 4;
         this._cellSize = 36;
-        this._overflowIconSize = 16;
+        this._overflowIconSize = this._settings.get_int('overflow-icon-size');
         this._cellSpacing = 4;
         this._gridLayout = new Clutter.GridLayout({
             column_homogeneous: true,
@@ -150,19 +216,49 @@ var OverflowManager = class AppIndicatorsOverflowManager {
             this._settings.connect('changed::overflow-pinned-ids', () => this._replaceAll()),
             this._settings.connect('changed::overflow-icon-order', () => this._applyOrder()),
             this._settings.connect('changed::overflow-button-side', () => this._applyOrder()),
+            this._settings.connect('changed::overflow-icon-size', () => {
+                this._overflowIconSize = this._settings.get_int('overflow-icon-size');
+                this._applyOverflowBoxOrder();
+            }),
         ];
 
+        this._rewriteUnusableKeys();
         this._refreshPopupActors();
     }
 
+    // Earlier versions could file an icon under the bus name it happened to
+    // have, under an id built from its process id, or under a separate
+    // "legacy:" name for its XEmbed form, which left dead entries behind and
+    // listed one application twice. A remembered name can stand in for such an
+    // id, so the entries are rewritten rather than dropped and an application
+    // that was pinned stays pinned.
+    _rewriteUnusableKeys() {
+        const known = this._settings.get_value('overflow-known-ids').deep_unpack()
+            .filter(([id]) => !isTransientKey(id));
+        const names = new Map(known);
+        const rewrite = id => stableKey(id.replace(/^legacy:/, ''), names.get(id));
+
+        const rewritten = new Map();
+        known.forEach(([id, name]) => {
+            const key = rewrite(id);
+            rewritten.set(key, isVolatileKey(name) ? displayName(null, key) : name);
+        });
+        this._settings.set_value('overflow-known-ids',
+            new GLib.Variant('a(ss)', [...rewritten]));
+
+        ['overflow-icon-order', 'overflow-pinned-ids'].forEach(setting => {
+            const keys = this._settings.get_strv(setting)
+                .filter(id => !isTransientKey(id))
+                .map(rewrite);
+            this._settings.set_strv(setting, [...new Set(keys)]);
+        });
+    }
+
     register(statusIcon) {
-        const key = overflowKey(statusIcon);
         // uniqueId is read upfront: a legacy icon drops its actor before the
         // destroy handler runs, and cannot report it anymore.
         const { uniqueId } = statusIcon;
         this._icons.set(uniqueId, statusIcon);
-        this._remember(key, displayName(statusIcon, key));
-        this._ensureInOrder(key);
 
         Util.connectSmart(statusIcon, 'notify::visible', this, () => {
             if (!this._button)
@@ -184,6 +280,25 @@ var OverflowManager = class AppIndicatorsOverflowManager {
                 this._button.rebuildManageList();
         });
 
+        // An icon whose proxy has not answered yet has no name worth writing
+        // down, so it is only shown for now and taken into the lists once it
+        // can say which application it belongs to.
+        if (statusIcon.isReady())
+            this._adopt(statusIcon);
+        else if (statusIcon._indicator)
+            Util.connectSmart(statusIcon._indicator, 'ready', this, () => this._adopt(statusIcon));
+
+        this._place(statusIcon);
+    }
+
+    _adopt(statusIcon) {
+        const key = overflowKey(statusIcon);
+        if (isTransientKey(key))
+            return;
+
+        this._remember(key, displayName(statusIcon, key));
+        this._ensureInOrder(key);
+
         if (!this._settings.get_boolean('overflow-hide-new') && !this.isKeyPinned(key))
             this.pinKey(key);
 
@@ -199,7 +314,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     }
 
     isHidden(statusIcon) {
-        if (!this._settings.get_boolean('overflow-enabled'))
+        if (!this._settings.get_boolean('overflow-enabled') || isPanelOnly(statusIcon))
             return false;
 
         return !this._settings.get_strv('overflow-pinned-ids').includes(overflowKey(statusIcon));
@@ -235,6 +350,22 @@ var OverflowManager = class AppIndicatorsOverflowManager {
             this.pinKey(key);
         else
             this.hideKey(key);
+    }
+
+    // Only worth doing for an application that is gone: a running one is put
+    // back on the lists as soon as anything rebuilds them.
+    forgetKey(key) {
+        const known = this._settings.get_value('overflow-known-ids').deep_unpack()
+            .filter(([id]) => id !== key);
+        this._settings.set_value('overflow-known-ids', new GLib.Variant('a(ss)', known));
+
+        ['overflow-icon-order', 'overflow-pinned-ids'].forEach(setting => {
+            this._settings.set_strv(setting,
+                this._settings.get_strv(setting).filter(id => id !== key));
+        });
+
+        if (this._managing)
+            this._button.rebuildManageList();
     }
 
     _remember(key, title) {
@@ -278,6 +409,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
                 name,
                 pinned: this.isKeyPinned(id),
                 live: !!this._iconForKey(id),
+                panelOnly: isPanelOnly(this._iconForKey(id)),
             }))
             .sort((a, b) => {
                 const ai = order.indexOf(a.id);
@@ -580,21 +712,43 @@ var OverflowManager = class AppIndicatorsOverflowManager {
             this._relayoutHiddenIcons();
     }
 
+    // The shell places and shows the popup before it announces that it is open,
+    // so whatever the popup should contain has to be there beforehand: filling
+    // it afterwards shows an empty popup for a frame, which then jumps to its
+    // real size once the icons arrive.
+    prepareOpen(manage) {
+        if (this._prepared && this._managing === manage)
+            return;
+
+        if (this._parkedMenuSource)
+            this._unparkMenuSource(this._parkedMenuSource);
+        this.setManaging(manage);
+        this._prepared = true;
+    }
+
     onMenuOpenChanged(open) {
         if (open) {
-            if (this._parkedMenuSource)
-                this._unparkMenuSource(this._parkedMenuSource);
             const manage = this._button._openMode === 'manage';
             this._button._openMode = 'icons';
-            this.setManaging(manage);
+            this.prepareOpen(manage);
         } else {
-            const keep = this._menuSourceIcon;
-            this.releaseEmbeddedIcons();
             this._managing = false;
-            this._unparentHiddenIcons();
-            if (keep)
-                this._parkMenuSource(keep);
+            this._prepared = false;
         }
+    }
+
+    // The popup only fades out after the shell has announced that it is closed,
+    // so the icons have to stay where they are until the animation is over:
+    // taking them out right away empties the popup while it is still on screen.
+    onMenuClosed() {
+        if (this._button && this._button.menu.isOpen)
+            return;
+
+        const keep = this._menuSourceIcon;
+        this.releaseEmbeddedIcons();
+        this._unparentHiddenIcons();
+        if (keep)
+            this._parkMenuSource(keep);
     }
 
     _isEmbeddedInList(statusIcon) {
@@ -623,6 +777,12 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     // An icon shown inside our popup must be unknown to the panel's menu
     // manager: entering it with the pointer would otherwise make the manager
     // switch to its menu, closing the popup right under the cursor.
+    //
+    // The menu currently on screen is the one exception. Unregistering it drops
+    // the manager's grab and disconnects the manager from it, so the manager
+    // never hears that it closed and goes on believing it is still the open
+    // one. It then skips taking a grab the next time that same menu opens, and
+    // a menu without a grab cannot be dismissed by clicking anywhere else.
     _unmanageMenu(menu) {
         const manager = Main.panel.menuManager;
         if (!menu || !manager || manager.activeMenu === menu)
@@ -637,13 +797,15 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     }
 
     _ensureMenuManaged(menu) {
-        if (!menu || !Main.panel.menuManager)
+        const manager = Main.panel.menuManager;
+        if (!menu || !manager || manager.activeMenu === menu)
             return;
+
         try {
-            Main.panel.menuManager.removeMenu(menu);
+            manager.removeMenu(menu);
         } catch (e) {
         }
-        Main.panel.menuManager.addMenu(menu);
+        manager.addMenu(menu);
     }
 
     _parkMenuSource(statusIcon) {
@@ -702,7 +864,15 @@ var OverflowManager = class AppIndicatorsOverflowManager {
                         statusIcon.menu.disconnect(statusIcon._overflowMenuCloseId);
                         delete statusIcon._overflowMenuCloseId;
                     }
-                    this._unparkMenuSource(statusIcon);
+                    // The panel closes this menu from inside the reparenting
+                    // that puts the icon back on it, and unparenting an actor
+                    // that is still mapped aborts Clutter, so let the frame
+                    // finish first. An icon destroyed meanwhile is caught by
+                    // the guard at the top of _unparkMenuSource().
+                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                        this._unparkMenuSource(statusIcon);
+                        return GLib.SOURCE_REMOVE;
+                    });
                 });
         }
     }
@@ -725,12 +895,8 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         this._resetActorGeometry(actor);
         this._clearOverflowCellStyle(statusIcon);
 
-        if (statusIcon.menu && Main.panel.menuManager && this.isHidden(statusIcon)) {
-            try {
-                Main.panel.menuManager.removeMenu(statusIcon.menu);
-            } catch (e) {
-            }
-        }
+        if (statusIcon.menu && this.isHidden(statusIcon))
+            this._unmanageMenu(statusIcon.menu);
     }
 
     openIconMenu(statusIcon) {
@@ -894,7 +1060,6 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         super._init(0.5, _('Tray overflow'), false);
         this._manager = manager;
         this._openMode = 'icons';
-        this.add_style_class_name('appindicator-button');
         this.add_style_class_name('appindicator-overflow-button');
 
         this._statsLabel = new St.Label({
@@ -939,11 +1104,21 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         this.menu.addMenuItem(this._manageEntry);
 
         this._manageSection = new PopupMenu.PopupMenuSection();
-        this.menu.addMenuItem(this._manageSection);
-        this._manageActor().visible = false;
+        // A popup taller than the screen is flipped below the panel by the
+        // shell, which puts it out of sight entirely, so the list scrolls
+        // instead of growing with the number of remembered icons.
+        this._manageScroll = new St.ScrollView({
+            style_class: 'appindicator-overflow-manage-scroll',
+            hscrollbar_policy: St.PolicyType.NEVER,
+            vscrollbar_policy: St.PolicyType.AUTOMATIC,
+            visible: false,
+        });
+        this._manageScroll.add_actor(this._manageSection.actor);
+        this.menu.box.add_child(this._manageScroll);
 
         this.menu.connect('open-state-changed', (_menu, open) =>
             manager.onMenuOpenChanged(open));
+        this.menu.connect('menu-closed', () => manager.onMenuClosed());
     }
 
     _updateStats() {
@@ -963,6 +1138,14 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
              event.type() !== Clutter.EventType.BUTTON_PRESS))
             return super.vfunc_event(event);
 
+        // The middle button opens no popup of its own, so it is the one click
+        // that can reach the monitor without anything flashing on the way.
+        if (this._eventButton(event) === Clutter.BUTTON_MIDDLE) {
+            this.menu.close();
+            openSystemMonitor();
+            return Clutter.EVENT_STOP;
+        }
+
         const wantManage = this._eventButton(event) === Clutter.BUTTON_SECONDARY;
         if (this.menu.isOpen) {
             if (wantManage === this._manager._managing)
@@ -973,12 +1156,23 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         }
 
         this._openMode = wantManage ? 'manage' : 'icons';
+        this._manager.prepareOpen(wantManage);
         this.menu.open();
         return Clutter.EVENT_STOP;
     }
 
     _manageActor() {
-        return this._manageSection.actor || this._manageSection.box || this._manageSection;
+        return this._manageScroll;
+    }
+
+    // Style lengths are in CSS pixels, while the work area is measured in the
+    // pixels the screen actually has.
+    _updateManageHeight() {
+        const workArea = Main.layoutManager.getWorkAreaForMonitor(
+            Main.layoutManager.primaryIndex);
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
+        this._manageScroll.style =
+            `max-height: ${Math.round(workArea.height * 0.8 / scale)}px`;
     }
 
     _createRowButton(iconName, enabled) {
@@ -1033,6 +1227,7 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
     rebuildManageList() {
         this._manager.releaseEmbeddedIcons();
         this._manageSection.removeAll();
+        this._updateManageHeight();
 
         const top = new PopupMenu.PopupBaseMenuItem({ activate: false });
         top.add_style_class_name('appindicator-overflow-manage-header');
@@ -1046,12 +1241,17 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         this._manageSection.addMenuItem(top);
 
         const header = new PopupMenu.PopupMenuItem(
-            _('Click a name to open its menu, click the eye to show or hide it'), {
+            _('Click a name to open its menu, the eye to show or hide it, middle-click to forget one that is not running'), {
                 reactive: false,
                 activate: false,
             });
         header.setSensitive(false);
         this._manageSection.addMenuItem(header);
+
+        let entries = this._manager.listManagedEntries();
+        const notRunning = entries.filter(entry => !entry.live).length;
+        if (this._manager._onlyRunning)
+            entries = entries.filter(entry => entry.live);
 
         const filterRow = new PopupMenu.PopupBaseMenuItem({ activate: false });
         const filterLabel = new St.Label({
@@ -1059,8 +1259,14 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
             x_expand: true,
             y_align: Clutter.ActorAlign.CENTER,
         });
+        // Saying how many entries the filter leaves out keeps the ones that can
+        // be forgotten from looking like they are not there at all.
+        let filterText = this._manager._onlyRunning ? _('On') : _('Off');
+        if (this._manager._onlyRunning && notRunning)
+            filterText = _('On, %d not running').format(notRunning);
+
         const filterState = new St.Label({
-            text: this._manager._onlyRunning ? _('On') : _('Off'),
+            text: filterText,
             y_align: Clutter.ActorAlign.CENTER,
         });
         filterRow.add_child(filterLabel);
@@ -1074,10 +1280,6 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
         });
         this._manageSection.addMenuItem(filterRow);
 
-        let entries = this._manager.listManagedEntries();
-        if (this._manager._onlyRunning)
-            entries = entries.filter(entry => entry.live);
-
         if (!entries.length) {
             const empty = new PopupMenu.PopupMenuItem(
                 this._manager._onlyRunning
@@ -1087,13 +1289,18 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
                 });
             empty.setSensitive(false);
             this._manageSection.addMenuItem(empty);
+            this._addSystemMonitorEntry();
             return;
         }
 
         const visibleIds = entries.map(entry => entry.id);
         entries.forEach((entry, index) => {
             const statusIcon = this._manager._iconForKey(entry.id);
-            const suffix = statusIcon ? '' : ` ${_('(not running)')}`;
+            let suffix = '';
+            if (!statusIcon)
+                suffix = ` ${_('(not running)')}`;
+            else if (entry.panelOnly)
+                suffix = ` ${_('(panel only)')}`;
             const row = new PopupMenu.PopupBaseMenuItem({ activate: false });
             const canEmbed = statusIcon && this._manager.isHidden(statusIcon);
 
@@ -1112,9 +1319,14 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
                 y_align: Clutter.ActorAlign.CENTER,
             });
             const stateToggle = this._createRowButton(
-                entry.pinned ? 'view-reveal-symbolic' : 'view-conceal-symbolic', true);
-            stateToggle.accessible_name = entry.pinned
-                ? _('Show on the panel') : _('Move into the overflow');
+                entry.pinned || entry.panelOnly
+                    ? 'view-reveal-symbolic' : 'view-conceal-symbolic',
+                !entry.panelOnly);
+            if (entry.panelOnly)
+                stateToggle.accessible_name = _('This icon can only stay on the panel');
+            else
+                stateToggle.accessible_name = entry.pinned
+                    ? _('Show on the panel') : _('Move into the overflow');
             const up = this._createRowButton('go-up-symbolic', index > 0);
             const down = this._createRowButton('go-down-symbolic',
                 index < entries.length - 1);
@@ -1130,6 +1342,15 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
                     this._manager.activateStatusIcon(statusIcon, event);
                     return Clutter.EVENT_STOP;
                 });
+            } else {
+                // An application that is gone is the only kind worth dropping
+                // from the lists: it is never coming back to claim its place.
+                row.connect('button-release-event', (_actor, event) => {
+                    if (event.get_button() !== Clutter.BUTTON_MIDDLE)
+                        return Clutter.EVENT_PROPAGATE;
+                    this._manager.forgetKey(entry.id);
+                    return Clutter.EVENT_STOP;
+                });
             }
 
             row.add_child(nameLabel);
@@ -1138,5 +1359,19 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
             row.add_child(down);
             this._manageSection.addMenuItem(row);
         });
+
+        this._addSystemMonitorEntry();
+    }
+
+    _addSystemMonitorEntry() {
+        this._manageSection.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const monitor = new PopupMenu.PopupMenuItem(_('Open System Monitor'));
+        monitor.connect('button-release-event', () => {
+            this.menu.close();
+            openSystemMonitor();
+            return Clutter.EVENT_STOP;
+        });
+        this._manageSection.addMenuItem(monitor);
     }
 });

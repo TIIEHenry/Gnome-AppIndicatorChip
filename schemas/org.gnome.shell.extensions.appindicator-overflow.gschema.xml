@@ -26,7 +26,9 @@
       <description>Icon size in pixel</description>
     </key>
     <key name="icon-spacing" type="i">
-      <default>12</default>
+      <!-- Smaller than upstream on purpose: the hover highlight is drawn by the
+           box around the icon, which already adds padding of its own. -->
+      <default>2</default>
       <summary>Icon spacing</summary>
       <description>Icon spacing within the tray</description>
     </key>
@@ -74,6 +76,12 @@
       <default>"end"</default>
       <summary>Overflow entry side</summary>
       <description>Whether the overflow entry sits before or after the tray icons</description>
+    </key>
+    <key name="overflow-icon-size" type="i">
+      <default>16</default>
+      <range min="8" max="32"/>
+      <summary>Overflow icon size</summary>
+      <description>Size in pixel of the icons inside the overflow popup</description>
     </key>
     <key name="overflow-manage-only-running" type="b">
       <default>true</default>

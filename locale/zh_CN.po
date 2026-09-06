@@ -55,6 +55,10 @@ msgid "Overflow entry position"
 msgstr "收纳入口位置"
 
 #: prefs.js
+msgid "Icon size in the overflow (min: 8, max: 32)"
+msgstr "收纳格内图标大小（最小 8，最大 32）"
+
+#: prefs.js
 msgid "Before the tray icons"
 msgstr "在托盘图标左侧"
 
@@ -91,8 +95,10 @@ msgid "Overflow list"
 msgstr "收纳列表"
 
 #: overflowManager.js
-msgid "Click a name to open its menu, click the eye to show or hide it"
-msgstr "点名称打开菜单，点眼睛图标切换显示或收纳"
+msgid ""
+"Click a name to open its menu, the eye to show or hide it, middle-click to "
+"forget one that is not running"
+msgstr "点名称打开菜单，点眼睛切换显示或收纳，中键移除未运行的条目"
 
 #: overflowManager.js
 msgid "Only show running"
@@ -103,10 +109,19 @@ msgstr "只显示运行中"
 msgid "On"
 msgstr "开"
 
+#. The "only show running" filter is enabled and leaves out %d entries
+#: overflowManager.js
+msgid "On, %d not running"
+msgstr "开，%d 条未运行"
+
 #. Whether the "only show running" filter is enabled
 #: overflowManager.js
 msgid "Off"
 msgstr "关"
+
+#: overflowManager.js
+msgid "Open System Monitor"
+msgstr "打开系统监视器"
 
 #: overflowManager.js
 msgid "No tray icon is running"
@@ -120,6 +135,15 @@ msgstr "还没有托盘图标"
 #: overflowManager.js
 msgid "(not running)"
 msgstr "（未运行）"
+
+#. Suffix for an old style tray icon, which cannot be moved into the overflow
+#: overflowManager.js
+msgid "(panel only)"
+msgstr "（只能留面板）"
+
+#: overflowManager.js
+msgid "This icon can only stay on the panel"
+msgstr "老式托盘图标只能留在面板上"
 
 #. The tray icon is shown on the panel
 #: overflowManager.js

@@ -114,24 +114,44 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
         Util.connectSmart(settings, 'changed::icon-opacity', this, this._updateOpacity);
         Util.connectSmart(settings, 'changed::icon-spacing', this, this._updateSpacing);
         this.connect('notify::hover', () => this._onHoverChanged());
+        // The highlight is drawn by the box around the icon rather than by the
+        // whole button, so the pressed state has to reach it as well.
+        const setPressed = pressed => {
+            const apply = actor => {
+                if (pressed)
+                    actor.add_style_pseudo_class('active');
+                else
+                    actor.remove_style_pseudo_class('active');
+            };
+            apply(this);
+            if (this._box)
+                apply(this._box);
+        };
+
         this.connect('button-press-event', () => {
-            this.add_style_pseudo_class('active');
+            setPressed(true);
             return Clutter.EVENT_PROPAGATE;
         });
-        this.connect('button-release-event', () => {
-            this.remove_style_pseudo_class('active');
+        // Opening the menu grabs the pointer, which arrives here as a leave
+        // event; dropping the highlight then would hide that the menu of this
+        // very icon is the one on screen.
+        const clearPressed = () => {
+            if (!this.menu || !this.menu.isOpen)
+                setPressed(false);
             return Clutter.EVENT_PROPAGATE;
-        });
-        this.connect('leave-event', () => {
-            this.remove_style_pseudo_class('active');
-            return Clutter.EVENT_PROPAGATE;
-        });
+        };
+        this.connect('button-release-event', clearPressed);
+        this.connect('leave-event', clearPressed);
+        if (this.menu) {
+            this.menu.connect('open-state-changed',
+                (_menu, open) => setPressed(open));
+        }
 
         if (!super._onDestroy)
             this.connect('destroy', () => this._onDestroy());
 
         this._box = new St.BoxLayout({
-            style_class: 'panel-status-indicators-box',
+            style_class: 'panel-status-indicators-box appindicator-icon-box',
             x_align: Clutter.ActorAlign.CENTER,
             y_align: Clutter.ActorAlign.CENTER,
         });
@@ -562,15 +582,8 @@ class AppIndicatorsIndicatorTrayIcon extends BaseStatusIcon {
         this.add_style_class_name('appindicator-icon');
         this.add_style_class_name('tray-icon');
 
-        this.connect('button-press-event', (_actor, event) => {
+        this.connect('button-press-event', () => {
             this.add_style_pseudo_class('active');
-            if (event.get_button() === Clutter.BUTTON_SECONDARY) {
-                const manager = Extension.imports.overflowManager.OverflowManager.peek();
-                if (manager && manager.isHidden(this)) {
-                    manager.pin(this);
-                    return Clutter.EVENT_STOP;
-                }
-            }
             return Clutter.EVENT_PROPAGATE;
         });
         this.connect('button-release-event', (_actor, event) => {

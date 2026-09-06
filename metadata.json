@@ -1,7 +1,7 @@
 {
-  "description": "Adds AppIndicator, KStatusNotifierItem and legacy Tray icons support to the Shell, with a Windows-style tray overflow whose panel entry shows the CPU and memory load",
+  "description": "Keeps the tray small the way Windows does: the icons you pin stay on the panel and the rest collapse into a popup grid. The entry that opens it is a chip reading out the CPU and memory load, so the tray spends that slot on something worth looking at. Middle click it, or use the entry at the bottom of its list, to open the system monitor. Tray support itself comes from AppIndicator and KStatusNotifierItem Support.",
   "gettext-domain": "AppIndicatorExtension",
-  "name": "AppIndicator Chip",
+  "name": "AppIndicator",
   "settings-schema": "org.gnome.shell.extensions.appindicator-overflow",
   "shell-version": [
     "42"

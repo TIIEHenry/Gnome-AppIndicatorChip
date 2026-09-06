@@ -5,6 +5,50 @@
     margin: 0;
 }
 
+/* The panel paints its own highlight across the whole button, spacing
+   included, which reads as a capsule around a small icon. Moving the
+   highlight onto the box that holds the icon makes it hug the icon, the way
+   the overflow grid does. */
+.panel-button.appindicator-button:hover,
+.panel-button.appindicator-button:active,
+.panel-button.appindicator-button:focus,
+.panel-button.appindicator-button:checked {
+    background-color: transparent;
+    background-image: none;
+    border-image: none;
+    box-shadow: none;
+}
+
+.panel-button.appindicator-button .appindicator-icon-box {
+    padding: 4px;
+    border-radius: 99px;
+    transition-duration: 100ms;
+}
+
+/* Themes tend to give old style tray icons a margin of their own, which sets
+   them apart from the D-Bus ones now that both always sit in the same row.
+   The selector needs the panel id to outweigh the rule it undoes. */
+#panel .panel-button.appindicator-button .appindicator-trayicons-box {
+    margin: 0;
+}
+
+/* Panels are usually dark, so the highlight is lighter here than the one the
+   popup draws on its own light background. */
+.panel-button.appindicator-button:hover .appindicator-icon-box {
+    background-color: rgba(200, 200, 200, 0.22);
+}
+
+.appindicator-icon-box:active {
+    background-color: rgba(200, 200, 200, 0.4);
+}
+
+/* Inside the overflow the cell already draws the highlight. */
+.appindicator-overflow-item .appindicator-icon-box,
+.appindicator-overflow-item .appindicator-icon-box:active {
+    background-color: transparent;
+    padding: 0;
+}
+
 .appindicator-overflow-box {
     padding: 8px;
 }

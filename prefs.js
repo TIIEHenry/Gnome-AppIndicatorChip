@@ -148,6 +148,33 @@ class AppIndicatorPreferences extends Gtk.Box {
             this.overflow_side_hbox.pack_start(widget, false, false, 0);
         }
 
+        this.overflow_icon_size_hbox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL,
+            spacing: 10,
+            margin_start: 10,
+            margin_end: 10,
+            margin_top: 10,
+            margin_bottom: 10 });
+        label = new Gtk.Label({
+            label: _('Icon size in the overflow (min: 8, max: 32)'),
+            hexpand: true,
+            halign: Gtk.Align.START,
+        });
+        widget = new Gtk.SpinButton({ halign: Gtk.Align.END });
+        widget.set_sensitive(true);
+        widget.set_range(8, 32);
+        widget.set_value(this._settings.get_int('overflow-icon-size'));
+        widget.set_increments(1, 2);
+        widget.connect('value-changed', w => {
+            this._settings.set_int('overflow-icon-size', w.get_value_as_int());
+        });
+        if (imports.gi.versions.Gtk === '4.0') {
+            this.overflow_icon_size_hbox.append(label);
+            this.overflow_icon_size_hbox.append(widget);
+        } else {
+            this.overflow_icon_size_hbox.pack_start(label, true, true, 0);
+            this.overflow_icon_size_hbox.pack_start(widget, false, false, 0);
+        }
+
         // Icon opacity
         this.opacity_hbox = new Gtk.Box({ orientation: Gtk.Orientation.HORIZONTAL,
             spacing: 10,
@@ -343,6 +370,7 @@ class AppIndicatorPreferences extends Gtk.Box {
             this.preferences_vbox.append(this.overflow_hbox);
             this.preferences_vbox.append(this.overflow_hide_new_hbox);
             this.preferences_vbox.append(this.overflow_side_hbox);
+            this.preferences_vbox.append(this.overflow_icon_size_hbox);
             this.preferences_vbox.append(this.opacity_hbox);
             this.preferences_vbox.append(this.saturation_hbox);
             this.preferences_vbox.append(this.brightness_hbox);
@@ -358,6 +386,7 @@ class AppIndicatorPreferences extends Gtk.Box {
             this.preferences_vbox.pack_start(this.overflow_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.overflow_hide_new_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.overflow_side_hbox, true, false, 0);
+            this.preferences_vbox.pack_start(this.overflow_icon_size_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.opacity_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.saturation_hbox, true, false, 0);
             this.preferences_vbox.pack_start(this.brightness_hbox, true, false, 0);

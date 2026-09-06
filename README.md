@@ -9,7 +9,7 @@ A fork of [gnome-shell-extension-appindicator](https://github.com/ubuntu/gnome-s
 - **托盘收纳**：不常用的托盘图标收进一个弹出面板，面板里按 4 列等距网格排列，图标尺寸统一。
 - **CPU / 内存读数入口**：收纳入口不是箭头，而是一个显示 `12 U 76 M` 的读数。数字用数字空格（U+2007）补位，宽度恒定，面板不会随负载抖动。采样方式参考
   [simple-system-monitor](https://github.com/lgiki/gnome-shell-extension-simple-system-monitor)，读取 `/proc/stat` 与 `/proc/meminfo`，每 2 秒刷新。
-- **管理列表**：右键收纳入口直接进入管理页，可以用眼睛图标切换某个图标显示在面板还是收纳起来，用上下箭头调整顺序。
+- **管理列表**：右键收纳入口直接进入管理页，可以用眼睛图标切换某个图标显示在面板还是收纳起来，用上下箭头调整顺序。标着「未运行」的条目中键点一下就能从记录里删掉。
 - **入口位置可选**：收纳入口可以放在托盘图标组的左侧或右侧。
 
 ## 安装
