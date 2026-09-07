@@ -962,13 +962,27 @@ var OverflowManager = class AppIndicatorsOverflowManager {
 
         const menu = statusIcon.menu;
         const openMenu = () => {
-            if (menu && !menu.isOpen)
-                menu.open();
+            const tryOpen = () => {
+                if (menu && !menu.isOpen)
+                    menu.open();
 
-            // A menu that refuses to open would leave its invisible source
-            // actor parked on top of the screen, eating every click on it.
-            if (!menu || !menu.isOpen)
-                this._unparkMenuSource(statusIcon);
+                // A menu that refuses to open would leave its invisible source
+                // actor parked on top of the screen, eating every click on it.
+                if (!menu || !menu.isOpen)
+                    this._unparkMenuSource(statusIcon);
+            };
+
+            // The shell paints the popup before it says it is open, so the
+            // application menu has to be complete before that first frame.
+            if (statusIcon.prepareMenuOpen) {
+                statusIcon.prepareMenuOpen().then(tryOpen).catch(e => {
+                    logError(e);
+                    tryOpen();
+                });
+                return;
+            }
+
+            tryOpen();
         };
 
         if (this._button && this._button.menu.isOpen) {

@@ -405,6 +405,20 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
         this._appendOverflowMenuItems();
     }
 
+    async prepareMenuOpen() {
+        if (this._menuClient)
+            await this._menuClient.prepareOpen();
+        this._appendOverflowMenuItems();
+    }
+
+    _toggleMenu() {
+        if (!this.menu)
+            return;
+        if (this._menuClient && !this.menu.isOpen)
+            this._menuClient.flushPendingItems();
+        this.menu.toggle();
+    }
+
     _clearOverflowMenuItems() {
         const items = this._overflowMenuItems || [];
         this._overflowMenuItems = [];
@@ -489,7 +503,7 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
 
         try {
             await this._waitDoubleClickPromise;
-            this.menu.toggle();
+            this._toggleMenu();
         } catch (e) {
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw e;
@@ -500,7 +514,7 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
 
     vfunc_event(event) {
         if (this.menu.numMenuItems && event.type() === Clutter.EventType.TOUCH_BEGIN)
-            this.menu.toggle();
+            this._toggleMenu();
 
         return Clutter.EVENT_PROPAGATE;
     }
@@ -525,7 +539,7 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
         }
 
         if (buttonEvent.button === Clutter.BUTTON_SECONDARY) {
-            this.menu.toggle();
+            this._toggleMenu();
             return Clutter.EVENT_PROPAGATE;
         }
 
@@ -536,7 +550,7 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
             if (this._indicator.supportsActivation)
                 this._waitForDoubleClick().catch(logError);
             else
-                this.menu.toggle();
+                this._toggleMenu();
         }
 
         return Clutter.EVENT_PROPAGATE;

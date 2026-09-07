@@ -194,7 +194,7 @@ var DbusMenuItem = class AppIndicatorsDbusMenuItem {
     }
 
     sendAboutToShow() {
-        this._client.sendAboutToShow(this._id);
+        return this._client.sendAboutToShow(this._id);
     }
 };
 Signals.addSignalMethods(DbusMenuItem.prototype);
@@ -323,10 +323,20 @@ var DBusClient = GObject.registerClass({
     // the original implementation will only request partial layouts if somehow possible
     // we try to save us from multiple kinds of race conditions by always requesting a full layout
     _beginLayoutUpdate(cancellable) {
-        this._layoutUpdateUpdateAsync(cancellable).catch(e => {
+        this._layoutPromise = this._layoutUpdateUpdateAsync(cancellable).catch(e => {
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e);
         });
+    }
+
+    async waitForLayout() {
+        if (!this._layoutPromise)
+            return;
+        try {
+            await this._layoutPromise;
+        } catch (e) {
+            // The request that created the promise already reported the error.
+        }
     }
 
     // the original implementation will only request partial layouts if somehow possible
@@ -504,8 +514,11 @@ var DBusClient = GObject.registerClass({
 
             if ((ret.is_of_type(new GLib.VariantType('(b)')) &&
                  ret.get_child_value(0).get_boolean()) ||
-                ret.is_of_type(new GLib.VariantType('()')))
-                this._requestLayoutUpdate();
+                ret.is_of_type(new GLib.VariantType('()'))) {
+                const cancellable = new Util.CancellableChild(this._cancellable);
+                this._layoutPromise = this._layoutUpdateUpdateAsync(cancellable);
+                await this._layoutPromise;
+            }
         } catch (e) {
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e);
@@ -823,6 +836,8 @@ var Client = class AppIndicatorsClient {
         this._client   = new DBusClient(busName, path);
         this._rootMenu = null; // the shell menu
         this._rootItem = null; // the DbusMenuItem for the root
+        this._itemsBeingAdded = new Set();
+        this._pendingAdds = [];
         this.indicator = indicator;
         this.cancellable = new Util.CancellableChild(this.indicator.cancellable);
 
@@ -839,12 +854,18 @@ var Client = class AppIndicatorsClient {
         return this._client.isReady;
     }
 
+    get isOpen() {
+        return !!(this._rootMenu && this._rootMenu.isOpen);
+    }
+
     // this will attach the client to an already existing menu that will be used as the root menu.
     // it will also connect the client to be automatically destroyed when the menu dies.
     attachToMenu(menu) {
         this._rootMenu = menu;
         this._rootItem = this._client.getRoot();
         this._itemsBeingAdded = new Set();
+        this._pendingAdds = [];
+        this._preparedOpen = false;
 
         // cleanup: remove existing children (just in case)
         this._rootMenu.removeAll();
@@ -869,6 +890,56 @@ var Client = class AppIndicatorsClient {
             this._onRootChildAdded(this._rootItem, child));
     }
 
+    // The shell shows the popup before it announces that it is open, so items
+    // still sitting in an idle queue would paint one by one. AboutToShow is
+    // started here so the first frame can already have the layout the
+    // application wants; a short wait is enough, because a hung reply would
+    // otherwise keep the menu from opening at all.
+    async prepareOpen() {
+        if (!this._rootItem || !this._client)
+            return;
+
+        this._preparedOpen = true;
+        this._client.active = true;
+        const ready = this._rootItem.sendAboutToShow().then(() =>
+            this._client.waitForLayout());
+        const timeout = new PromiseUtils.TimeoutPromise(
+            300, GLib.PRIORITY_DEFAULT, this.cancellable);
+        try {
+            await Promise.race([ready, timeout]);
+        } catch (e) {
+            this._preparedOpen = false;
+            if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                throw e;
+        } finally {
+            timeout.cancel();
+        }
+        this.flushPendingItems();
+    }
+
+    flushPendingItems() {
+        if (!this._rootMenu || !this._pendingAdds)
+            return;
+
+        const pending = this._pendingAdds;
+        this._pendingAdds = [];
+        pending.forEach(({ child, position }) =>
+            this._commitRootChild(child, position));
+    }
+
+    _commitRootChild(child, position) {
+        if (!this._rootMenu || !this._itemsBeingAdded ||
+            !this._itemsBeingAdded.has(child))
+            return;
+
+        try {
+            this._rootMenu.addMenuItem(
+                MenuItemFactory.createItem(this, child), position);
+        } finally {
+            this._itemsBeingAdded.delete(child);
+        }
+    }
+
     _setOpenedSubmenu(submenu) {
         if (!submenu)
             return;
@@ -886,22 +957,36 @@ var Client = class AppIndicatorsClient {
     }
 
     _onRootChildAdded(dbusItem, child, position) {
-        // Menu additions can be expensive, so let's do it in different chunks
-        const basePriority = this.isOpen ? GLib.PRIORITY_DEFAULT : GLib.PRIORITY_LOW;
-        const idlePromise = new PromiseUtils.IdlePromise(
-            basePriority + this._itemsBeingAdded.size, this.cancellable);
+        if (!this._itemsBeingAdded || this._itemsBeingAdded.has(child))
+            return;
+
         this._itemsBeingAdded.add(child);
 
-        idlePromise.then(() => {
-            if (!this._itemsBeingAdded.has(child))
-                return;
+        // Building every item in its own idle made an open menu grow one row
+        // per frame. While the menu is on screen the items go in together; while
+        // it is closed they still wait for a single idle so login is not one
+        // long hitch.
+        if (this.isOpen) {
+            this._commitRootChild(child, position);
+            return;
+        }
 
-            this._rootMenu.addMenuItem(
-                MenuItemFactory.createItem(this, child), position);
+        if (!this._pendingAdds)
+            this._pendingAdds = [];
+        this._pendingAdds.push({ child, position });
+        if (this._addIdle)
+            return;
+
+        this._addIdle = new PromiseUtils.IdlePromise(
+            GLib.PRIORITY_LOW, this.cancellable);
+        this._addIdle.then(() => {
+            this._addIdle = null;
+            this.flushPendingItems();
         }).catch(e => {
+            this._addIdle = null;
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e);
-        }).finally(() => this._itemsBeingAdded.delete(child));
+        });
     }
 
     _onRootChildRemoved(dbusItem, child) {
@@ -910,11 +995,13 @@ var Client = class AppIndicatorsClient {
         const item = this._rootMenu._getMenuItems().find(it =>
             it._dbusItem === child);
 
-        if (item)
+        if (item) {
             item.destroy();
-        else
+        } else if (this._itemsBeingAdded) {
             this._itemsBeingAdded.delete(child);
-
+            this._pendingAdds = (this._pendingAdds || []).filter(p =>
+                p.child !== child);
+        }
     }
 
     _onRootChildMoved(dbusItem, child, oldpos, newpos) {
@@ -931,9 +1018,20 @@ var Client = class AppIndicatorsClient {
             if (this._openedSubMenu && this._openedSubMenu.isOpen)
                 this._openedSubMenu.close();
 
+            this.flushPendingItems();
             this._rootItem.handleEvent('opened', null, 0);
+
+            // prepareOpen already asked for the layout the application wants
+            // to show; asking again would rebuild the menu after the first
+            // frame and make it grow a second time.
+            if (this._preparedOpen) {
+                this._preparedOpen = false;
+                return;
+            }
+
             this._rootItem.sendAboutToShow();
         } else {
+            this._preparedOpen = false;
             this._rootItem.handleEvent('closed', null, 0);
         }
     }
@@ -949,6 +1047,8 @@ var Client = class AppIndicatorsClient {
         this._rootMenu = null;
         this.indicator = null;
         this._itemsBeingAdded = null;
+        this._pendingAdds = null;
+        this._addIdle = null;
     }
 };
 Signals.addSignalMethods(Client.prototype);
