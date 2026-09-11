@@ -589,6 +589,8 @@ const MenuItemFactory = {
 
         shellItem._dbusItem = dbusItem;
         shellItem._dbusClient = client;
+        shellItem._destroyed = false;
+        shellItem._dbusSignals = [];
 
         if (shellItem instanceof PopupMenu.PopupMenuItem) {
             shellItem._icon = new St.Icon({
@@ -612,33 +614,85 @@ const MenuItemFactory = {
                 shellItem.menu.addMenuItem(MenuItemFactory.createItem(client, c)));
         }
 
-        // now, connect various events
-        Util.connectSmart(dbusItem, 'property-changed',
-            shellItem, MenuItemFactory._onPropertyChanged);
-        Util.connectSmart(dbusItem, 'child-added',
-            shellItem, MenuItemFactory._onChildAdded);
-        Util.connectSmart(dbusItem, 'child-removed',
-            shellItem, MenuItemFactory._onChildRemoved);
-        Util.connectSmart(dbusItem, 'child-moved',
-            shellItem, MenuItemFactory._onChildMoved);
-        Util.connectSmart(shellItem, 'activate',
-            shellItem, MenuItemFactory._onActivate);
+        // Connect DBus signals explicitly without attaching to GObject 'destroy'.
+        // We manage teardown explicitly when destroy() is invoked.
+        const connectDbus = (sig, handler) => {
+            const id = dbusItem.connect(sig, handler.bind(shellItem));
+            shellItem._dbusSignals.push([dbusItem, id]);
+        };
 
-        shellItem.connect('destroy', () => {
+        connectDbus('property-changed', MenuItemFactory._onPropertyChanged);
+        connectDbus('child-added', MenuItemFactory._onChildAdded);
+        connectDbus('child-removed', MenuItemFactory._onChildRemoved);
+        connectDbus('child-moved', MenuItemFactory._onChildMoved);
+
+        shellItem._shellSignals = [];
+        const activateId = shellItem.connect('activate',
+            MenuItemFactory._onActivate.bind(shellItem));
+        shellItem._shellSignals.push([shellItem, activateId]);
+
+        if (shellItem.menu) {
+            const openStateId = shellItem.menu.connect('open-state-changed',
+                MenuItemFactory._onOpenStateChanged.bind(shellItem));
+            shellItem._shellSignals.push([shellItem.menu, openStateId]);
+        }
+
+        // Override destroy on shellItem to guarantee safe, synchronous teardown
+        // BEFORE any C ClutterActor destruction or GC sweep can trigger.
+        const origDestroy = shellItem.destroy.bind(shellItem);
+        shellItem.destroy = function () {
+            if (shellItem._destroyed)
+                return;
+            shellItem._destroyed = true;
+
+            // 1. Synchronously disconnect all DBus signals from dbusItem
+            if (shellItem._dbusSignals) {
+                shellItem._dbusSignals.forEach(([src, id]) => {
+                    if (src && id && src.disconnect) {
+                        try {
+                            src.disconnect(id);
+                        } catch (e) {}
+                    }
+                });
+                shellItem._dbusSignals = [];
+            }
+
+            // 2. Disconnect shell signals
+            if (shellItem._shellSignals) {
+                shellItem._shellSignals.forEach(([src, id]) => {
+                    if (src && id && src.disconnect) {
+                        try {
+                            src.disconnect(id);
+                        } catch (e) {}
+                    }
+                });
+                shellItem._shellSignals = [];
+            }
+
+            // 3. SubMenu items natively have this.connect('destroy', () => this.menu.destroy()).
+            // Clean up the submenu manually now to prevent GJS GC-sweep interception.
+            if (shellItem.menu) {
+                try {
+                    shellItem.menu.destroy();
+                } catch (e) {}
+            }
+
             shellItem._dbusItem = null;
             shellItem._dbusClient = null;
             shellItem._icon = null;
-        });
 
-        if (shellItem.menu) {
-            Util.connectSmart(shellItem.menu, 'open-state-changed',
-                shellItem,  MenuItemFactory._onOpenStateChanged);
-        }
+            try {
+                origDestroy();
+            } catch (e) {}
+        };
 
         return shellItem;
     },
 
     _onOpenStateChanged(menu, open) {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         if (open) {
             if (NEED_NESTED_SUBMENU_FIX) {
                 // close our own submenus
@@ -666,8 +720,11 @@ const MenuItemFactory = {
     },
 
     _onActivate(_item, event) {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         const timestamp = event.get_time();
-        if (timestamp && this._dbusClient.indicator)
+        if (timestamp && this._dbusClient && this._dbusClient.indicator)
             this._dbusClient.indicator.provideActivationToken(timestamp);
 
         this._dbusItem.handleEvent('clicked', GLib.Variant.new('i', 0),
@@ -675,23 +732,38 @@ const MenuItemFactory = {
     },
 
     _onPropertyChanged(dbusItem, prop, _value) {
-        if (prop === 'toggle-type' || prop === 'toggle-state')
+        if (this._destroyed || !this._dbusItem)
+            return;
+
+        if (prop === 'toggle-type' || prop === 'toggle-state') {
             MenuItemFactory._updateOrnament.call(this);
-        else if (prop === 'label')
+        } else if (prop === 'label') {
             MenuItemFactory._updateLabel.call(this);
-        else if (prop === 'enabled')
+        } else if (prop === 'enabled') {
             MenuItemFactory._updateSensitive.call(this);
-        else if (prop === 'visible')
+        } else if (prop === 'visible') {
             MenuItemFactory._updateVisible.call(this);
-        else if (prop === 'icon-name' || prop === 'icon-data')
+        } else if (prop === 'icon-name' || prop === 'icon-data') {
             MenuItemFactory._updateImage.call(this);
-        else if (prop === 'type' || prop === 'children-display')
-            MenuItemFactory._replaceSelf.call(this);
-        else
+        } else if (prop === 'type') {
+            const isSep = this._dbusItem.propertyGet('type') === 'separator';
+            const wasSep = this instanceof PopupMenu.PopupSeparatorMenuItem;
+            if (isSep !== wasSep)
+                MenuItemFactory._replaceSelf.call(this);
+        } else if (prop === 'children-display') {
+            const isSub = this._dbusItem.propertyGet('children-display') === 'submenu';
+            const wasSub = this instanceof PopupMenu.PopupSubMenuMenuItem;
+            if (isSub !== wasSub)
+                MenuItemFactory._replaceSelf.call(this);
+        } else {
             Util.Logger.debug(`Unhandled property change: ${prop}`);
+        }
     },
 
     _onChildAdded(dbusItem, child, position) {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
             Util.Logger.warn('Tried to add a child to non-submenu item. Better recreate it as whole');
             MenuItemFactory._replaceSelf.call(this);
@@ -701,9 +773,11 @@ const MenuItemFactory = {
     },
 
     _onChildRemoved(dbusItem, child) {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
-            Util.Logger.warn('Tried to remove a child from non-submenu item. Better recreate it as whole');
-            MenuItemFactory._replaceSelf.call(this);
+            Util.Logger.warn('Tried to remove a child from non-submenu item.');
         } else {
             // find it!
             this.menu._getMenuItems().forEach(item => {
@@ -714,15 +788,20 @@ const MenuItemFactory = {
     },
 
     _onChildMoved(dbusItem, child, oldpos, newpos) {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
-            Util.Logger.warn('Tried to move a child in non-submenu item. Better recreate it as whole');
-            MenuItemFactory._replaceSelf.call(this);
+            Util.Logger.warn('Tried to move a child in non-submenu item.');
         } else {
             MenuUtils.moveItemInMenu(this.menu, child, newpos);
         }
     },
 
     _updateLabel() {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         let label = this._dbusItem.propertyGet('label').replace(/_([^_])/, '$1');
 
         if (this.label) // especially on GS3.8, the separator item might not even have a hidden label
@@ -730,6 +809,9 @@ const MenuItemFactory = {
     },
 
     _updateOrnament() {
+        if (this._destroyed || !this._dbusItem)
+            return;
+
         if (!this.setOrnament)
             return; // separators and alike might not have gotten the polyfill
 
@@ -742,7 +824,7 @@ const MenuItemFactory = {
     },
 
     async _updateImage() {
-        if (!this._icon)
+        if (this._destroyed || !this._dbusItem || !this._icon)
             return; // might be missing on submenus / separators
 
         let iconName = this._dbusItem.propertyGet('icon-name');
@@ -763,14 +845,21 @@ const MenuItemFactory = {
     },
 
     _updateVisible() {
+        if (this._destroyed || !this._dbusItem)
+            return;
         this.visible = this._dbusItem.propertyGetBool('visible');
     },
 
     _updateSensitive() {
+        if (this._destroyed || !this._dbusItem)
+            return;
         this.setSensitive(this._dbusItem.propertyGetBool('enabled'));
     },
 
     _replaceSelf(newSelf) {
+        if (this._destroyed || !this._parent)
+            return;
+
         // create our new self if needed
         if (!newSelf)
             newSelf = MenuItemFactory.createItem(this._dbusClient, this._dbusItem);
@@ -783,9 +872,11 @@ const MenuItemFactory = {
                 pos = i;
         }
 
-        if (pos < 0)
-            throw new Error("DBusMenu: can't replace non existing menu item");
-
+        if (pos < 0) {
+            Util.Logger.warn("DBusMenu: can't replace non existing menu item");
+            this.destroy();
+            return;
+        }
 
         // add our new self while we're still alive
         this._parent.addMenuItem(newSelf, pos);
@@ -1039,6 +1130,13 @@ var Client = class AppIndicatorsClient {
     destroy() {
         this.emit('destroy');
 
+        if (this._addIdle) {
+            try {
+                this._addIdle.cancel();
+            } catch (e) {}
+            this._addIdle = null;
+        }
+
         if (this._client)
             this._client.destroy();
 
@@ -1048,7 +1146,6 @@ var Client = class AppIndicatorsClient {
         this.indicator = null;
         this._itemsBeingAdded = null;
         this._pendingAdds = null;
-        this._addIdle = null;
     }
 };
 Signals.addSignalMethods(Client.prototype);

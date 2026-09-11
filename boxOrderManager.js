@@ -81,6 +81,7 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
             throw new Error('BoxOrderManager is already constructed');
 
         this._settings = SettingsManager.getDefaultGSettings();
+        this._destroyed = false;
         this._applying = false;
         this._writingSettings = false;
         this._syncingTrayPos = false;
@@ -94,7 +95,7 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
     }
 
     apply() {
-        if (this._applying || !isUserSession())
+        if (this._destroyed || this._applying || !isUserSession())
             return;
 
         this._applying = true;
@@ -108,11 +109,13 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
     }
 
     scheduleApply() {
-        if (this._idleId || this._applying)
+        if (this._destroyed || this._idleId || this._applying)
             return;
 
-        this._idleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+        this._idleId = GLib.timeout_add(GLib.PRIORITY_DEFAULT_IDLE, 50, () => {
             this._idleId = 0;
+            if (this._destroyed || !isUserSession())
+                return GLib.SOURCE_REMOVE;
             this.apply();
             return GLib.SOURCE_REMOVE;
         });
@@ -445,8 +448,10 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
         }
 
         this._panelBoxes().forEach(box => {
+            if (!box)
+                return;
             this._boxSignals.push([box, box.connect('actor-added', () => {
-                if (!this._applying)
+                if (!this._applying && !this._destroyed)
                     this.scheduleApply();
             })]);
         });
@@ -460,15 +465,27 @@ var BoxOrderManager = class AppIndicatorsBoxOrderManager {
     }
 
     _destroy() {
+        this._destroyed = true;
+
         if (this._idleId) {
-            GLib.source_remove(this._idleId);
+            try {
+                GLib.source_remove(this._idleId);
+            } catch (e) {}
             this._idleId = 0;
         }
 
-        this._settingsIds.forEach(id => this._settings.disconnect(id));
+        this._settingsIds.forEach(id => {
+            try {
+                this._settings.disconnect(id);
+            } catch (e) {}
+        });
         this._settingsIds = [];
 
-        this._boxSignals.forEach(([box, id]) => box.disconnect(id));
+        this._boxSignals.forEach(([box, id]) => {
+            try {
+                box.disconnect(id);
+            } catch (e) {}
+        });
         this._boxSignals = [];
 
         if (Panel.Panel.prototype._addToPanelBox === patchedAddToPanelBox &&

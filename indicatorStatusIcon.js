@@ -175,8 +175,15 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
         if (!(icon instanceof Clutter.Actor))
             throw new Error(`${icon} is not a valid actor`);
 
-        if (this._icon && this._icon !== icon)
+        if (this._icon && this._icon !== icon) {
+            if (this._iconDestroyId) {
+                try {
+                    this._icon.disconnect(this._iconDestroyId);
+                } catch (e) {}
+                this._iconDestroyId = 0;
+            }
             this._icon.destroy();
+        }
 
         this._icon = icon;
         this._updateEffects();
@@ -188,8 +195,8 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
                 y_align: Clutter.ActorAlign.CENTER,
             });
             this._box.add_child(this._icon);
-            const id = this._icon.connect('destroy', () => {
-                this._icon.disconnect(id);
+            this._iconDestroyId = this._icon.connect('destroy', () => {
+                this._iconDestroyId = 0;
                 this._icon = null;
                 this._monitorIconEffects();
             });
@@ -197,8 +204,16 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
     }
 
     _onDestroy() {
-        if (this._icon)
+        if (this._icon) {
+            if (this._iconDestroyId) {
+                try {
+                    this._icon.disconnect(this._iconDestroyId);
+                } catch (e) {}
+                this._iconDestroyId = 0;
+            }
             this._icon.destroy();
+            this._icon = null;
+        }
 
         if (super._onDestroy)
             super._onDestroy();
@@ -422,7 +437,12 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
     _clearOverflowMenuItems() {
         const items = this._overflowMenuItems || [];
         this._overflowMenuItems = [];
-        items.forEach(item => item.destroy());
+        items.forEach(item => {
+            try {
+                if (item && !item._destroyed && item.destroy)
+                    item.destroy();
+            } catch (e) {}
+        });
     }
 
     _appendOverflowMenuItems() {
@@ -444,12 +464,7 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
         this.menu.addMenuItem(sep);
         this.menu.addMenuItem(action);
 
-        // Both the menu rebuild and the DBus menu client drop these items
-        // behind our back, so let them remove themselves from the list.
         this._overflowMenuItems = [sep, action];
-        this._overflowMenuItems.forEach(item => item.connect('destroy', () => {
-            this._overflowMenuItems = this._overflowMenuItems.filter(i => i !== item);
-        }));
     }
 
     _showIfReady() {

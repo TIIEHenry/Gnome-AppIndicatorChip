@@ -176,10 +176,23 @@ function connectSmart3A(src, signal, handler) {
     let id = src.connect(signal, handler);
     let destroyId = 0;
 
-    if (src.connect && (!(src instanceof GObject.Object) || GObject.signal_lookup('destroy', src))) {
+    // Never connect JS callbacks to GObject 'destroy' signal.
+    // In GJS, callbacks connected to GObject 'destroy' are blocked during GC
+    // sweeping and will cause severe log storms or crashes.
+    if (src.connect && !(src instanceof GObject.Object)) {
         destroyId = src.connect('destroy', () => {
-            src.disconnect(id);
-            src.disconnect(destroyId);
+            if (id && src && src.disconnect) {
+                try {
+                    src.disconnect(id);
+                } catch (e) {}
+                id = 0;
+            }
+            if (destroyId && src && src.disconnect) {
+                try {
+                    src.disconnect(destroyId);
+                } catch (e) {}
+                destroyId = 0;
+            }
         });
     }
 
@@ -191,21 +204,37 @@ function connectSmart4A(src, signal, target, method) {
         throw new TypeError('Unsupported function');
 
     method = method.bind(target);
-    const signalId = src.connect(signal, method);
+    let signalId = src.connect(signal, method);
+    let srcDestroyId = 0;
+    let tgtDestroyId = 0;
+
     const onDestroy = () => {
-        src.disconnect(signalId);
-        if (srcDestroyId)
-            src.disconnect(srcDestroyId);
-        if (tgtDestroyId)
-            target.disconnect(tgtDestroyId);
+        if (signalId && src && src.disconnect) {
+            try {
+                src.disconnect(signalId);
+            } catch (e) {}
+            signalId = 0;
+        }
+        if (srcDestroyId && src && src.disconnect) {
+            try {
+                src.disconnect(srcDestroyId);
+            } catch (e) {}
+            srcDestroyId = 0;
+        }
+        if (tgtDestroyId && target && target.disconnect) {
+            try {
+                target.disconnect(tgtDestroyId);
+            } catch (e) {}
+            tgtDestroyId = 0;
+        }
     };
 
-    // GObject classes might or might not have a destroy signal
-    // JS Classes will not complain when connecting to non-existent signals
-    const srcDestroyId = src.connect && (!(src instanceof GObject.Object) ||
-        GObject.signal_lookup('destroy', src)) ? src.connect('destroy', onDestroy) : 0;
-    const tgtDestroyId = target.connect && (!(target instanceof GObject.Object) ||
-        GObject.signal_lookup('destroy', target)) ? target.connect('destroy', onDestroy) : 0;
+    // Never connect to GObject 'destroy' signal.
+    // Only connect 'destroy' on pure JS classes (like Signals.addSignalMethods).
+    if (src.connect && !(src instanceof GObject.Object))
+        srcDestroyId = src.connect('destroy', onDestroy);
+    if (target.connect && !(target instanceof GObject.Object))
+        tgtDestroyId = target.connect('destroy', onDestroy);
 
     return [signalId, srcDestroyId, tgtDestroyId];
 }
@@ -228,20 +257,34 @@ function connectSmart(...args) {
 }
 
 function disconnectSmart3A(src, signalIds) {
+    if (!signalIds || !Array.isArray(signalIds))
+        return;
     const [id, destroyId] = signalIds;
-    src.disconnect(id);
+    if (id && src && src.disconnect) {
+        try {
+            src.disconnect(id);
+        } catch (e) {}
+    }
 
-    if (destroyId)
-        src.disconnect(destroyId);
+    if (destroyId && src && src.disconnect) {
+        try {
+            src.disconnect(destroyId);
+        } catch (e) {}
+    }
 }
 
 function disconnectSmart4A(src, tgt, signalIds) {
+    if (!signalIds || !Array.isArray(signalIds))
+        return;
     const [signalId, srcDestroyId, tgtDestroyId] = signalIds;
 
     disconnectSmart3A(src, [signalId, srcDestroyId]);
 
-    if (tgtDestroyId)
-        tgt.disconnect(tgtDestroyId);
+    if (tgtDestroyId && tgt && tgt.disconnect) {
+        try {
+            tgt.disconnect(tgtDestroyId);
+        } catch (e) {}
+    }
 }
 
 function disconnectSmart(...args) {

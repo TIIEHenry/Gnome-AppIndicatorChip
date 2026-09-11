@@ -152,9 +152,7 @@ var SignalConnectionPromise = class extends CancellablePromise {
                     resolve(args.length === 1 ? args[0] : args);
             });
 
-            if (signal !== 'destroy' &&
-                (!(object instanceof GObject.Object) ||
-                 GObject.signal_lookup('destroy', object.constructor.$gtype)))
+            if (signal !== 'destroy' && !(object instanceof GObject.Object))
                 destroyId = connectSignal('destroy', () => this.cancel());
         }, cancellable);
 
