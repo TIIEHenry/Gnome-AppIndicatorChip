@@ -944,10 +944,17 @@ class AppIndicatorsIconActor extends St.Icon {
             this._invalidateIconWhenFullyReady();
         });
 
-        if (GObject.signal_lookup('resource-scale-changed', this))
-            this.connect('resource-scale-changed', () => this._invalidateIconWhenFullyReady());
-        else
-            this.connect('notify::resource-scale', () => this._invalidateIconWhenFullyReady());
+        if (GObject.signal_lookup('resource-scale-changed', this)) {
+            this._resourceScaleId = this.connect('resource-scale-changed', () => {
+                if (!this._disposed)
+                    this._invalidateIconWhenFullyReady();
+            });
+        } else {
+            this._resourceScaleId = this.connect('notify::resource-scale', () => {
+                if (!this._disposed)
+                    this._invalidateIconWhenFullyReady();
+            });
+        }
 
         Util.connectSmart(themeContext, 'notify::scale-factor', this, () => {
             this._updateIconSize();
@@ -958,21 +965,43 @@ class AppIndicatorsIconActor extends St.Icon {
         Util.connectSmart(Util.getDefaultTheme(), 'changed', this,
             () => this._invalidateIconWhenFullyReady());
 
-        this.connect('notify::mapped', () => {
-            if (this.is_mapped())
+        this._mappedId = this.connect('notify::mapped', () => {
+            if (!this._disposed && this.is_mapped())
                 this._invalidateIconWhenFullyReady();
         });
 
         this._updateWhenFullyReady();
+    }
 
-        this.connect('destroy', () => {
+    _disposeResources() {
+        if (this._disposed)
+            return;
+        this._disposed = true;
+        Util.disconnectAllSmart(this);
+        if (this._mappedId) {
+            this.disconnect(this._mappedId);
+            this._mappedId = 0;
+        }
+        if (this._resourceScaleId) {
+            this.disconnect(this._resourceScaleId);
+            this._resourceScaleId = 0;
+        }
+        if (this._iconCache) {
             this._iconCache.destroy();
+            this._iconCache = null;
+        }
+        if (this._cancellable) {
             this._cancellable.cancel();
             this._cancellable = null;
-            this._indicator = null;
-            this._loadingIcons = null;
-            this._iconTheme = null;
-        });
+        }
+        this._indicator = null;
+        this._loadingIcons = null;
+        this._iconTheme = null;
+    }
+
+    vfunc_destroy() {
+        this._disposeResources();
+        super.vfunc_destroy();
     }
 
     get debugId() {
@@ -980,6 +1009,9 @@ class AppIndicatorsIconActor extends St.Icon {
     }
 
     async _waitForFullyReady() {
+        if (this._disposed || !this._indicator || !this._cancellable)
+            return false;
+
         const waitConditions = [];
 
         if (!this.is_mapped()) {
@@ -996,16 +1028,19 @@ class AppIndicatorsIconActor extends St.Icon {
             return true;
 
         await Promise.all(waitConditions);
+        if (this._disposed || !this._indicator)
+            return false;
         return this._waitForFullyReady();
     }
 
     async _updateWhenFullyReady() {
-        if (this._waitingReady)
+        if (this._disposed || this._waitingReady)
             return;
 
         try {
             this._waitingReady = true;
-            await this._waitForFullyReady();
+            if (!await this._waitForFullyReady())
+                return;
 
             this._updateIconSize();
             this._updateIconClass();
@@ -1513,6 +1548,9 @@ class AppIndicatorsIconActor extends St.Icon {
     }
 
     async _updateIconByType(iconType, iconSize) {
+        if (this._disposed || !this._indicator)
+            return;
+
         let icon;
         switch (iconType) {
         case SNIconType.ATTENTION:
@@ -1531,11 +1569,12 @@ class AppIndicatorsIconActor extends St.Icon {
 
         if (this._customIcons.size) {
             let customIcon = this._customIcons.get(iconType);
-            if (!await this._createAndSetIcon(customIcon, null, ...commonArgs)) {
-                if (iconType !== SNIconType.OVERLAY) {
-                    customIcon = this._customIcons.get(SNIconType.NORMAL);
-                    await this._createAndSetIcon(customIcon, null, ...commonArgs);
-                }
+            const ok = await this._createAndSetIcon(customIcon, null, ...commonArgs);
+            if (this._disposed || !this._indicator)
+                return;
+            if (!ok && iconType !== SNIconType.OVERLAY) {
+                customIcon = this._customIcons.get(SNIconType.NORMAL);
+                await this._createAndSetIcon(customIcon, null, ...commonArgs);
             }
         } else {
             await this._createAndSetIcon(name, pixmap, ...commonArgs);
@@ -1543,12 +1582,16 @@ class AppIndicatorsIconActor extends St.Icon {
     }
 
     async _createAndSetIcon(name, pixmap, theme, iconType, iconSize) {
+        if (this._disposed || !this._cancellable || !this._indicator)
+            return null;
+
         let gicon = null;
 
         try {
             gicon = await this._createIcon(name, pixmap, theme, iconType, iconSize);
         } catch (e) {
-            if (e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED) ||
+            if (this._disposed || !this._cancellable ||
+                e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED) ||
                 e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.PENDING))
                 return null;
 
@@ -1559,6 +1602,10 @@ class AppIndicatorsIconActor extends St.Icon {
                 logError(e, `${this.debugId} unable to update icon`);
             }
         }
+
+        if (this._disposed || !this._cancellable || this._cancellable.is_cancelled() ||
+            Util.isDisposed(this) || !this._indicator)
+            return null;
 
         try {
             this._setGicon(iconType, gicon);
@@ -1579,6 +1626,9 @@ class AppIndicatorsIconActor extends St.Icon {
 
     // updates the base icon
     async _createIcon(name, pixmap, theme, iconType, iconSize) {
+        if (this._disposed || !this._cancellable || !this._indicator)
+            return null;
+
         const { scaleFactor } = St.ThemeContext.get_for_stage(global.stage);
         const resourceScale = this._getResourceScale();
         const iconScaling = Math.ceil(resourceScale * scaleFactor);
@@ -1604,6 +1654,8 @@ class AppIndicatorsIconActor extends St.Icon {
 
     // updates the base icon
     async _updateIcon() {
+        if (this._disposed || !this._indicator)
+            return;
         if (this._indicator.status === SNIStatus.PASSIVE)
             return;
 
@@ -1649,12 +1701,13 @@ class AppIndicatorsIconActor extends St.Icon {
     }
 
     async _invalidateIconWhenFullyReady() {
-        if (this._waitingInvalidation)
+        if (this._disposed || this._waitingInvalidation)
             return;
 
         try {
             this._waitingInvalidation = true;
-            await this._waitForFullyReady();
+            if (!await this._waitForFullyReady())
+                return;
             this._invalidateIcon();
         } catch (e) {
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
@@ -1666,6 +1719,9 @@ class AppIndicatorsIconActor extends St.Icon {
 
     // called when the icon theme changes
     _invalidateIcon() {
+        if (this._disposed || !this._iconCache || !this._cancellable || !this._loadingIcons)
+            return;
+
         this._iconCache.clear();
         this._cancellable.cancel();
         this._cancellable = new Gio.Cancellable();

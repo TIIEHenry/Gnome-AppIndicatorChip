@@ -16,7 +16,8 @@
 
 /* exported CancellableChild, getUniqueBusName, getBusNames,
    introspectBusObject, dbusNodeImplementsInterfaces, waitForStartupCompletion,
-   connectSmart, disconnectSmart, versionCheck, getDefaultTheme, destroyDefaultTheme,
+   connectSmart, disconnectSmart, disconnectAllSmart, isDisposed,
+   versionCheck, getDefaultTheme, destroyDefaultTheme,
    getProcessName, indicatorId, tryCleanupOldIndicators, DBusProxy */
 
 const ByteArray = imports.byteArray;
@@ -172,6 +173,59 @@ var NameWatcher = class AppIndicatorsNameWatcher {
 };
 Signals.addSignalMethods(NameWatcher.prototype);
 
+function isDisposed(object) {
+    if (!object)
+        return true;
+    if (object._destroyed || object._disposed)
+        return true;
+    try {
+        if (typeof object.is_finalized === 'function' && object.is_finalized())
+            return true;
+    } catch (e) {
+        return true;
+    }
+    return false;
+}
+
+const _smartOwners = new WeakMap();
+
+function _trackSmart(owner, src, ids) {
+    if (!owner || !ids)
+        return;
+    let list = _smartOwners.get(owner);
+    if (!list) {
+        list = [];
+        _smartOwners.set(owner, list);
+    }
+    list.push({ src, ids });
+}
+
+function _untrackSmart(owner, ids) {
+    const list = _smartOwners.get(owner);
+    if (!list)
+        return;
+    const index = list.findIndex(entry => entry.ids === ids);
+    if (index !== -1)
+        list.splice(index, 1);
+    if (!list.length)
+        _smartOwners.delete(owner);
+}
+
+function disconnectAllSmart(owner) {
+    const list = _smartOwners.get(owner);
+    if (!list)
+        return;
+    _smartOwners.delete(owner);
+    list.forEach(({ src, ids }) => {
+        try {
+            if (ids.length === 3)
+                disconnectSmart4A(src, owner, ids);
+            else
+                disconnectSmart3A(src, ids);
+        } catch (e) {}
+    });
+}
+
 function connectSmart3A(src, signal, handler) {
     let id = src.connect(signal, handler);
     let destroyId = 0;
@@ -204,39 +258,18 @@ function connectSmart4A(src, signal, target, method) {
         throw new TypeError('Unsupported function');
 
     method = method.bind(target);
-    let signalId = src.connect(signal, method);
-    let srcDestroyId = 0;
-    let tgtDestroyId = 0;
+    // Share the IDs with teardown so automatic and explicit disconnection
+    // both clear the same state and can safely run more than once.
+    const ids = [src.connect(signal, method), 0, 0];
+    const onDestroy = () => disconnectSmart4A(src, target, ids);
 
-    const onDestroy = () => {
-        if (signalId && src && src.disconnect) {
-            try {
-                src.disconnect(signalId);
-            } catch (e) {}
-            signalId = 0;
-        }
-        if (srcDestroyId && src && src.disconnect) {
-            try {
-                src.disconnect(srcDestroyId);
-            } catch (e) {}
-            srcDestroyId = 0;
-        }
-        if (tgtDestroyId && target && target.disconnect) {
-            try {
-                target.disconnect(tgtDestroyId);
-            } catch (e) {}
-            tgtDestroyId = 0;
-        }
-    };
-
-    // Never connect to GObject 'destroy' signal.
-    // Only connect 'destroy' on pure JS classes (like Signals.addSignalMethods).
+    // Only pure JS objects emit destroy safely during normal JS teardown.
     if (src.connect && !(src instanceof GObject.Object))
-        srcDestroyId = src.connect('destroy', onDestroy);
+        ids[1] = src.connect('destroy', onDestroy);
     if (target.connect && !(target instanceof GObject.Object))
-        tgtDestroyId = target.connect('destroy', onDestroy);
+        ids[2] = target.connect('destroy', onDestroy);
 
-    return [signalId, srcDestroyId, tgtDestroyId];
+    return ids;
 }
 
 // eslint-disable-next-line valid-jsdoc
@@ -250,16 +283,21 @@ function connectSmart4A(src, signal, target, method) {
  *      Util.connectSmart(srcOb, 'signal', () => { ... })
  */
 function connectSmart(...args) {
-    if (arguments.length === 4)
-        return connectSmart4A(...args);
-    else
-        return connectSmart3A(...args);
+    if (arguments.length === 4) {
+        const ids = connectSmart4A(...args);
+        _trackSmart(args[2], args[0], ids);
+        return ids;
+    }
+
+    return connectSmart3A(...args);
 }
 
 function disconnectSmart3A(src, signalIds) {
     if (!signalIds || !Array.isArray(signalIds))
         return;
     const [id, destroyId] = signalIds;
+    signalIds[0] = 0;
+    signalIds[1] = 0;
     if (id && src && src.disconnect) {
         try {
             src.disconnect(id);
@@ -277,6 +315,8 @@ function disconnectSmart4A(src, tgt, signalIds) {
     if (!signalIds || !Array.isArray(signalIds))
         return;
     const [signalId, srcDestroyId, tgtDestroyId] = signalIds;
+    signalIds.fill(0);
+    _untrackSmart(tgt, signalIds);
 
     disconnectSmart3A(src, [signalId, srcDestroyId]);
 

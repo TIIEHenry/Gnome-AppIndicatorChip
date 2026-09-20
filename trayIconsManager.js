@@ -75,14 +75,9 @@ var TrayIconsManager = class TrayIconsManager {
         const overflow = Extension.imports.overflowManager.OverflowManager.getDefault();
         const trayIcons = overflow.getTrayIcons().concat(IndicatorStatusIcon.getTrayIcons());
         [...new Set(trayIcons)].forEach(i => i.destroy());
-        if (this._tray.unmanage_screen) {
+        if (this._tray.unmanage_screen)
             this._tray.unmanage_screen();
-            this._tray = null;
-        } else {
-            // FIXME: This is very ugly, but it's needed by old shell versions
-            this._tray = null;
-            imports.system.gc(); // force finalizing tray to unmanage screen
-        }
+        this._tray = null;
     }
 
     onTrayIconAdded(_tray, icon) {

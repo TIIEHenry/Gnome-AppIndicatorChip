@@ -1,3 +1,16 @@
+.panel-button.appindicator-button,
+.panel-button.appindicator-button .system-status-icon,
+.panel-button.appindicator-button .appindicator-icon,
+.panel-button.appindicator-button .status-notifier-icon,
+.appindicator-icon,
+.appindicator-overflow-button,
+.appindicator-overflow-item,
+.appindicator-overflow-cell {
+    box-shadow: none !important;
+    text-shadow: none !important;
+    icon-shadow: none !important;
+}
+
 .panel-button.appindicator-button .appindicator-icon,
 .panel-button.appindicator-button .system-status-icon,
 .panel-button.appindicator-button .status-notifier-icon {

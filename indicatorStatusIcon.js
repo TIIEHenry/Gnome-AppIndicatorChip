@@ -27,7 +27,6 @@ const AppDisplay = imports.ui.appDisplay;
 const Main = imports.ui.main;
 const Panel = imports.ui.panel;
 const PanelMenu = imports.ui.panelMenu;
-const PopupMenu = imports.ui.popupMenu;
 
 const ExtensionUtils = imports.misc.extensionUtils;
 const Extension = ExtensionUtils.getCurrentExtension();
@@ -176,13 +175,11 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
             throw new Error(`${icon} is not a valid actor`);
 
         if (this._icon && this._icon !== icon) {
-            if (this._iconDestroyId) {
-                try {
-                    this._icon.disconnect(this._iconDestroyId);
-                } catch (e) {}
-                this._iconDestroyId = 0;
-            }
-            this._icon.destroy();
+            if (this._icon._disposeResources)
+                this._icon._disposeResources();
+            try {
+                this._icon.destroy();
+            } catch (e) {}
         }
 
         this._icon = icon;
@@ -195,24 +192,25 @@ class AppIndicatorsIndicatorBaseStatusIcon extends PanelMenu.Button {
                 y_align: Clutter.ActorAlign.CENTER,
             });
             this._box.add_child(this._icon);
-            this._iconDestroyId = this._icon.connect('destroy', () => {
-                this._iconDestroyId = 0;
-                this._icon = null;
-                this._monitorIconEffects();
-            });
         }
     }
 
     _onDestroy() {
+        this._destroyed = true;
+        Util.disconnectAllSmart(this);
+
+        const overflow = Extension.imports.overflowManager.OverflowManager.peek();
+        if (overflow)
+            overflow.unregister(this);
+
         if (this._icon) {
-            if (this._iconDestroyId) {
-                try {
-                    this._icon.disconnect(this._iconDestroyId);
-                } catch (e) {}
-                this._iconDestroyId = 0;
-            }
-            this._icon.destroy();
+            if (this._icon._disposeResources)
+                this._icon._disposeResources();
+            try {
+                this._icon.destroy();
+            } catch (e) {}
             this._icon = null;
+            this._monitorIconEffects();
         }
 
         if (super._onDestroy)
@@ -368,11 +366,12 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
     }
 
     _onDestroy() {
-        if (this._menuClient) {
-            this._menuClient.disconnect(this._menuReadyId);
-            this._menuClient.destroy();
-            this._menuClient = null;
-        }
+        this._destroyed = true;
+        Util.disconnectAllSmart(this);
+        if (this._waitDoubleClickPromise)
+            this._waitDoubleClickPromise.cancel();
+
+        this._disposeMenuClient();
 
         super._onDestroy();
     }
@@ -386,6 +385,8 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
     }
 
     _updateStatus() {
+        if (this._destroyed || !this._indicator)
+            return;
         const wasVisible = this.visible;
         this.visible = this._indicator.status !== AppIndicator.SNIStatus.PASSIVE;
 
@@ -393,37 +394,58 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
             this._indicator.checkAlive().catch(logError);
     }
 
-    _updateMenu() {
-        if (this._menuClient) {
-            this._menuClient.disconnect(this._menuReadyId);
-            this._menuClient.destroy();
-            this._menuClient = null;
-            this.menu.removeAll();
+    _disposeMenuClient() {
+        if (!this._menuClient)
+            return;
+        if (this._menuReadyId) {
+            try {
+                this._menuClient.disconnect(this._menuReadyId);
+            } catch (e) {}
+            this._menuReadyId = 0;
         }
+        try {
+            this._menuClient.destroy();
+        } catch (e) {}
+        this._menuClient = null;
+    }
 
-        if (this.visible && this._indicator.menuPath) {
-            this._menuClient = new DBusMenu.Client(this._indicator.busName,
-                this._indicator.menuPath, this._indicator);
+    _onMenuReadyChanged() {
+        if (this._destroyed || !this._menuClient)
+            return;
+        if (this._menuClient.isReady)
+            this._menuClient.attachToMenu(this.menu);
+        else
+            this._menuClient.detachFromMenu();
+    }
 
-            if (this._menuClient.isReady)
-                this._menuClient.attachToMenu(this.menu);
+    _updateMenu() {
+        if (this._destroyed || this._updatingMenu || !this.menu)
+            return;
 
-            this._menuReadyId = this._menuClient.connect('ready-changed', () => {
+        const menuPath = (this.visible && this._indicator && this._indicator.menuPath)
+            ? this._indicator.menuPath : null;
+        if (this._menuClient && this._menuClient._busPath === menuPath)
+            return;
+
+        this._updatingMenu = true;
+        try {
+            this._disposeMenuClient();
+            if (menuPath) {
+                this._menuClient = new DBusMenu.Client(this._indicator.busName,
+                    menuPath, this._indicator);
+                this._menuReadyId = this._menuClient.connect('ready-changed',
+                    () => this._onMenuReadyChanged());
                 if (this._menuClient.isReady)
                     this._menuClient.attachToMenu(this.menu);
-                else
-                    this._updateMenu();
-                this._appendOverflowMenuItems();
-            });
+            }
+        } finally {
+            this._updatingMenu = false;
         }
-
-        this._appendOverflowMenuItems();
     }
 
     async prepareMenuOpen() {
         if (this._menuClient)
             await this._menuClient.prepareOpen();
-        this._appendOverflowMenuItems();
     }
 
     _toggleMenu() {
@@ -432,39 +454,6 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
         if (this._menuClient && !this.menu.isOpen)
             this._menuClient.flushPendingItems();
         this.menu.toggle();
-    }
-
-    _clearOverflowMenuItems() {
-        const items = this._overflowMenuItems || [];
-        this._overflowMenuItems = [];
-        items.forEach(item => {
-            try {
-                if (item && !item._destroyed && item.destroy)
-                    item.destroy();
-            } catch (e) {}
-        });
-    }
-
-    _appendOverflowMenuItems() {
-        this._clearOverflowMenuItems();
-        const manager = Extension.imports.overflowManager.OverflowManager.peek();
-        if (!manager)
-            return;
-
-        const sep = new PopupMenu.PopupSeparatorMenuItem();
-        const action = manager.isHidden(this)
-            ? new PopupMenu.PopupMenuItem(_('Show on the panel'))
-            : new PopupMenu.PopupMenuItem(_('Move into the overflow'));
-        action.connect('activate', () => {
-            if (manager.isHidden(this))
-                manager.pin(this);
-            else
-                manager.hide(this);
-        });
-        this.menu.addMenuItem(sep);
-        this.menu.addMenuItem(action);
-
-        this._overflowMenuItems = [sep, action];
     }
 
     _showIfReady() {
@@ -518,7 +507,8 @@ class AppIndicatorsIndicatorStatusIcon extends BaseStatusIcon {
 
         try {
             await this._waitDoubleClickPromise;
-            this._toggleMenu();
+            if (!this._destroyed)
+                this._toggleMenu();
         } catch (e) {
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 throw e;
@@ -629,11 +619,6 @@ class AppIndicatorsIndicatorTrayIcon extends BaseStatusIcon {
             this._icon.click(event);
             this.remove_style_pseudo_class('active');
             return Clutter.EVENT_PROPAGATE;
-        });
-
-        Util.connectSmart(this._icon, 'destroy', this, () => {
-            icon.clear_effects();
-            this.destroy();
         });
 
         const settings = SettingsManager.getDefaultGSettings();

@@ -835,8 +835,11 @@ const MenuItemFactory = {
             try {
                 const inputStream = Gio.MemoryInputStream.new_from_bytes(
                     iconData.get_data_as_bytes());
-                this._icon.gicon = await GdkPixbuf.Pixbuf.new_from_stream_async(
+                const pixbuf = await GdkPixbuf.Pixbuf.new_from_stream_async(
                     inputStream, this._dbusClient.cancellable);
+                if (this._destroyed || !this._icon)
+                    return;
+                this._icon.gicon = pixbuf;
             } catch (e) {
                 if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                     logError(e);
@@ -949,36 +952,71 @@ var Client = class AppIndicatorsClient {
         return !!(this._rootMenu && this._rootMenu.isOpen);
     }
 
+    _clearDbusMenuItems() {
+        if (!this._rootMenu || !this._rootMenu._getMenuItems)
+            return;
+        this._rootMenu._getMenuItems().slice().forEach(item => {
+            if (!item || !item._dbusItem)
+                return;
+            try {
+                item.destroy();
+            } catch (e) {}
+        });
+    }
+
+    detachFromMenu() {
+        if (this._menuSignals) {
+            this._menuSignals.forEach(([src, ids]) => {
+                try {
+                    Util.disconnectSmart(src, this, ids);
+                } catch (e) {}
+            });
+            this._menuSignals = null;
+        }
+        this._clearDbusMenuItems();
+        this._rootMenu = null;
+        this._rootItem = null;
+        this._attached = false;
+        this._itemsBeingAdded = new Set();
+        this._pendingAdds = [];
+        this._preparedOpen = false;
+    }
+
     // this will attach the client to an already existing menu that will be used as the root menu.
     // it will also connect the client to be automatically destroyed when the menu dies.
     attachToMenu(menu) {
+        if (!menu || this._destroyed || !this._client)
+            return;
+        if (this._attached && this._rootMenu === menu)
+            return;
+
+        this.detachFromMenu();
+
         this._rootMenu = menu;
         this._rootItem = this._client.getRoot();
         this._itemsBeingAdded = new Set();
         this._pendingAdds = [];
         this._preparedOpen = false;
 
-        // cleanup: remove existing children (just in case)
-        this._rootMenu.removeAll();
+        this._clearDbusMenuItems();
 
         if (NEED_NESTED_SUBMENU_FIX)
             menu._setOpenedSubMenu = this._setOpenedSubmenu.bind(this);
 
-        // connect handlers
-        Util.connectSmart(menu, 'open-state-changed', this, this._onMenuOpened);
-        Util.connectSmart(menu, 'destroy', this, this.destroy);
+        this._menuSignals = [
+            [menu, Util.connectSmart(menu, 'open-state-changed', this, this._onMenuOpened)],
+            [menu, Util.connectSmart(menu, 'destroy', this, this.destroy)],
+            [this._rootItem, Util.connectSmart(this._rootItem, 'child-added', this, this._onRootChildAdded)],
+            [this._rootItem, Util.connectSmart(this._rootItem, 'child-removed', this, this._onRootChildRemoved)],
+            [this._rootItem, Util.connectSmart(this._rootItem, 'child-moved', this, this._onRootChildMoved)],
+        ];
 
-        Util.connectSmart(this._rootItem, 'child-added', this, this._onRootChildAdded);
-        Util.connectSmart(this._rootItem, 'child-removed', this, this._onRootChildRemoved);
-        Util.connectSmart(this._rootItem, 'child-moved', this, this._onRootChildMoved);
-
-        // Dropbox requires us to call AboutToShow(0) first
         this._rootItem.sendAboutToShow();
 
-        // fill the menu for the first time
         const children = this._rootItem.getChildren();
         children.forEach(child =>
             this._onRootChildAdded(this._rootItem, child));
+        this._attached = true;
     }
 
     // The shell shows the popup before it announces that it is open, so items
@@ -987,7 +1025,7 @@ var Client = class AppIndicatorsClient {
     // application wants; a short wait is enough, because a hung reply would
     // otherwise keep the menu from opening at all.
     async prepareOpen() {
-        if (!this._rootItem || !this._client)
+        if (this._destroyed || !this._rootItem || !this._client)
             return;
 
         this._preparedOpen = true;
@@ -1048,7 +1086,8 @@ var Client = class AppIndicatorsClient {
     }
 
     _onRootChildAdded(dbusItem, child, position) {
-        if (!this._itemsBeingAdded || this._itemsBeingAdded.has(child))
+        if (this._destroyed || !this._rootMenu || !this._itemsBeingAdded ||
+            this._itemsBeingAdded.has(child))
             return;
 
         this._itemsBeingAdded.add(child);
@@ -1081,6 +1120,9 @@ var Client = class AppIndicatorsClient {
     }
 
     _onRootChildRemoved(dbusItem, child) {
+        if (this._destroyed || !this._rootMenu)
+            return;
+
         // children like to play hide and seek
         // but we know how to find it for sure!
         const item = this._rootMenu._getMenuItems().find(it =>
@@ -1100,7 +1142,7 @@ var Client = class AppIndicatorsClient {
     }
 
     _onMenuOpened(menu, state) {
-        if (!this._rootItem)
+        if (this._destroyed || !this._rootItem || !this._client)
             return;
 
         this._client.active = state;
@@ -1128,6 +1170,9 @@ var Client = class AppIndicatorsClient {
     }
 
     destroy() {
+        if (this._destroyed)
+            return;
+        this._destroyed = true;
         this.emit('destroy');
 
         if (this._addIdle) {
@@ -1135,6 +1180,14 @@ var Client = class AppIndicatorsClient {
                 this._addIdle.cancel();
             } catch (e) {}
             this._addIdle = null;
+        }
+
+        this.detachFromMenu();
+
+        if (this.cancellable) {
+            try {
+                this.cancellable.cancel();
+            } catch (e) {}
         }
 
         if (this._client)

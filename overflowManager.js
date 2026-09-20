@@ -169,12 +169,15 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         // Keyed by uniqueId: two instances of the same application share an
         // overflow key, but they are distinct icons.
         this._icons = new Map();
+        this._iconSignals = new Map();
         this._settings = SettingsManager.getDefaultGSettings();
         this._managing = false;
         this._prepared = false;
         this._gridGeometry = null;
         this._menuSourceIcon = null;
         this._parkedMenuSource = null;
+        this._destroyed = false;
+        this._sourceIds = new Set();
         this._onlyRunning = this._settings.get_boolean('overflow-manage-only-running');
         // Sizes are in CSS pixels and scaled where actor geometry is set, so
         // that every cell keeps the same size on HiDPI displays.
@@ -261,25 +264,17 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         const { uniqueId } = statusIcon;
         this._icons.set(uniqueId, statusIcon);
 
-        Util.connectSmart(statusIcon, 'notify::visible', this, () => {
+        this._disconnectIconSignals(statusIcon);
+        const signals = [];
+        this._iconSignals.set(statusIcon, signals);
+        signals.push([statusIcon, Util.connectSmart(statusIcon, 'notify::visible', this, () => {
             if (!this._button)
                 return;
             if (this._managing)
                 this._button.rebuildManageList();
             else if (this._button.menu.isOpen)
                 this._showHiddenIcons();
-        });
-
-        Util.connectSmart(statusIcon, 'destroy', this, () => {
-            this._icons.delete(uniqueId);
-            if (this._parkedMenuSource === statusIcon)
-                this._parkedMenuSource = null;
-            if (this._menuSourceIcon === statusIcon)
-                this._menuSourceIcon = null;
-            this._refreshPopupActors();
-            if (this._managing)
-                this._button.rebuildManageList();
-        });
+        })]);
 
         // An icon whose proxy has not answered yet has no name worth writing
         // down, so it is only shown for now and taken into the lists once it
@@ -287,9 +282,69 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         if (statusIcon.isReady())
             this._adopt(statusIcon);
         else if (statusIcon._indicator)
-            Util.connectSmart(statusIcon._indicator, 'ready', this, () => this._adopt(statusIcon));
+            signals.push([statusIcon._indicator,
+                Util.connectSmart(statusIcon._indicator, 'ready', this, () => this._adopt(statusIcon))]);
 
         this._place(statusIcon);
+    }
+
+    _disconnectIconSignals(statusIcon) {
+        const signals = this._iconSignals.get(statusIcon);
+        if (!signals)
+            return;
+        this._iconSignals.delete(statusIcon);
+        signals.forEach(([src, ids]) => Util.disconnectSmart(src, this, ids));
+    }
+
+    unregister(statusIcon) {
+        if (!statusIcon || this._destroyed)
+            return;
+
+        this._disconnectIconSignals(statusIcon);
+
+        let uniqueId = null;
+        this._icons.forEach((icon, id) => {
+            if (icon === statusIcon)
+                uniqueId = id;
+        });
+        if (uniqueId)
+            this._icons.delete(uniqueId);
+
+        if (this._parkedMenuSource === statusIcon)
+            this._parkedMenuSource = null;
+        if (this._menuSourceIcon === statusIcon)
+            this._menuSourceIcon = null;
+        if (statusIcon._overflowMenuCloseId && statusIcon.menu) {
+            try {
+                statusIcon.menu.disconnect(statusIcon._overflowMenuCloseId);
+            } catch (e) {}
+            delete statusIcon._overflowMenuCloseId;
+        }
+
+        this._refreshPopupActors();
+        if (this._managing && this._button)
+            this._button.rebuildManageList();
+    }
+
+    _idleAdd(priority, callback) {
+        let id = 0;
+        id = GLib.idle_add(priority, () => {
+            this._sourceIds.delete(id);
+            if (this._destroyed)
+                return GLib.SOURCE_REMOVE;
+            return callback();
+        });
+        this._sourceIds.add(id);
+        return id;
+    }
+
+    _clearSources() {
+        this._sourceIds.forEach(id => {
+            try {
+                GLib.source_remove(id);
+            } catch (e) {}
+        });
+        this._sourceIds.clear();
     }
 
     _adopt(statusIcon) {
@@ -509,11 +564,34 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     _moveToOverflow(statusIcon) {
         IndicatorStatusIcon.removeIconFromPanel(statusIcon);
 
+        if (statusIcon === this._parkedMenuSource || statusIcon === this._menuSourceIcon)
+            return;
+
         if (!this._isInOverflow(statusIcon) && !this._isEmbeddedInList(statusIcon))
             this._unparent(panelActor(statusIcon));
 
         if (this._button.menu.isOpen && !this._managing)
             this._relayoutHiddenIcons();
+        else if (!this._managing)
+            this._holdHiddenIcon(statusIcon);
+    }
+
+    _holdHiddenIcon(statusIcon) {
+        if (!statusIcon || this._destroyed)
+            return;
+        if (statusIcon === this._parkedMenuSource || statusIcon === this._menuSourceIcon)
+            return;
+        const actor = panelActor(statusIcon);
+        if (this._isInOverflow(statusIcon))
+            return;
+        this._unparent(actor);
+        actor.opacity = 255;
+        this._resetActorGeometry(actor);
+        this._applyOverflowCellStyle(statusIcon);
+        this._hiddenGrid.add_child(this._wrapOverflowCell(actor));
+        // These holding cells have no grid coordinates yet. Rebuild them on
+        // the next open even when the icon order and size have not changed.
+        this._gridGeometry = null;
     }
 
     _isInOverflow(statusIcon) {
@@ -800,6 +878,15 @@ var OverflowManager = class AppIndicatorsOverflowManager {
         this._unparentHiddenIcons();
         if (keep)
             this._parkMenuSource(keep);
+        this._holdHiddenIcons();
+    }
+
+    _holdHiddenIcons() {
+        if (this._destroyed || this._managing)
+            return;
+        if (this._button && this._button.menu.isOpen)
+            return;
+        this._hiddenIcons().forEach(icon => this._holdHiddenIcon(icon));
     }
 
     _isEmbeddedInList(statusIcon) {
@@ -920,7 +1007,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
                     // that is still mapped aborts Clutter, so let the frame
                     // finish first. An icon destroyed meanwhile is caught by
                     // the guard at the top of _unparkMenuSource().
-                    GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._idleAdd(GLib.PRIORITY_DEFAULT, () => {
                         this._unparkMenuSource(statusIcon);
                         return GLib.SOURCE_REMOVE;
                     });
@@ -948,6 +1035,10 @@ var OverflowManager = class AppIndicatorsOverflowManager {
 
         if (statusIcon.menu && this.isHidden(statusIcon))
             this._unmanageMenu(statusIcon.menu);
+
+        if (this.isHidden(statusIcon) && !this._managing &&
+            !(this._button && this._button.menu.isOpen))
+            this._holdHiddenIcon(statusIcon);
     }
 
     openIconMenu(statusIcon) {
@@ -991,7 +1082,7 @@ var OverflowManager = class AppIndicatorsOverflowManager {
                 if (open)
                     return;
                 overflowMenu.disconnect(id);
-                GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                this._idleAdd(GLib.PRIORITY_DEFAULT_IDLE, () => {
                     openMenu();
                     return GLib.SOURCE_REMOVE;
                 });
@@ -1095,6 +1186,10 @@ var OverflowManager = class AppIndicatorsOverflowManager {
     }
 
     _destroy() {
+        this._destroyed = true;
+        Util.disconnectAllSmart(this);
+        this._iconSignals.clear();
+        this._clearSources();
         this._settingsIds.forEach(id => this._settings.disconnect(id));
         if (this._parkedMenuSource)
             this._unparkMenuSource(this._parkedMenuSource);
@@ -1141,11 +1236,6 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
                 this._updateStats();
                 return GLib.SOURCE_CONTINUE;
             });
-        this.connect('destroy', () => {
-            if (this._statsTimeoutId)
-                GLib.source_remove(this._statsTimeoutId);
-            this._statsTimeoutId = 0;
-        });
 
         this._iconsItem = new PopupMenu.PopupBaseMenuItem({
             activate: false,
@@ -1189,6 +1279,14 @@ class AppIndicatorsOverflowButton extends PanelMenu.Button {
     _updateStats() {
         this._statsLabel.text =
             `${formatUsage(this._stats.cpuUsage(), 'U')} ${formatUsage(this._stats.memoryUsage(), 'M')}`;
+    }
+
+    destroy() {
+        if (this._statsTimeoutId) {
+            GLib.source_remove(this._statsTimeoutId);
+            this._statsTimeoutId = 0;
+        }
+        super.destroy();
     }
 
     _eventButton(event) {
