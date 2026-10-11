@@ -42,6 +42,35 @@ PromiseUtils._promisify(Gio.DBusConnection.prototype, 'call', 'call_finish');
 PromiseUtils._promisify(Gio._LocalFilePrototype, 'read', 'read_finish');
 PromiseUtils._promisify(Gio.InputStream.prototype, 'read_bytes_async', 'read_bytes_finish');
 
+// GNOME 42's GJS does not make Gio.DBusError a constructible class, so
+// `instanceof` never matches. Tauri trays answer with FAILED instead of
+// UNKNOWN_PROPERTY; logging those dumps every JS stack and stalls the shell.
+function isDBusError(e) {
+    if (!e || typeof e.matches !== 'function')
+        return false;
+
+    const codes = [
+        Gio.DBusError.FAILED,
+        Gio.DBusError.UNKNOWN_PROPERTY,
+        Gio.DBusError.UNKNOWN_METHOD,
+        Gio.DBusError.UNKNOWN_OBJECT,
+        Gio.DBusError.UNKNOWN_INTERFACE,
+        Gio.DBusError.INVALID_ARGS,
+        Gio.DBusError.TIMEOUT,
+        Gio.DBusError.NO_REPLY,
+        Gio.DBusError.TIMED_OUT,
+        Gio.DBusError.SERVICE_UNKNOWN,
+        Gio.DBusError.NAME_HAS_NO_OWNER,
+    ];
+    for (let i = 0; i < codes.length; i++) {
+        try {
+            if (codes[i] !== undefined && e.matches(Gio.DBusError, codes[i]))
+                return true;
+        } catch (err) {}
+    }
+    return false;
+}
+
 function indicatorId(service, busName, objectPath) {
     if (service && service !== busName && service.match(BUS_ADDRESS_REGEX))
         return service;

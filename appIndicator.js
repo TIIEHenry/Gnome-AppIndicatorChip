@@ -203,8 +203,13 @@ class AppIndicatorProxy extends Util.DBusProxy {
                         skipEqualityCheck: p.endsWith('Pixmap'),
                     });
                 } catch (e) {
-                    if (!AppIndicatorProxy.OPTIONAL_PROPERTIES.includes(p) ||
-                        !e.matches(Gio.DBusError, Gio.DBusError.UNKNOWN_PROPERTY))
+                    // Electron and Tauri trays (Clash Verge among them) answer
+                    // Properties.Get with FAILED or UNKNOWN_PROPERTY for pixmap
+                    // and tooltip fields they do not implement. logError dumps
+                    // every live JS stack into the journal and stalls the shell.
+                    if (Util.isDBusError(e))
+                        return;
+                    if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         logError(e);
                 }
             }));

@@ -520,6 +520,10 @@ var DBusClient = GObject.registerClass({
                 await this._layoutPromise;
             }
         } catch (e) {
+            // Tauri trays return FAILED for AboutToShow. That is not fatal,
+            // and logError's stack dump is what stalls the shell.
+            if (Util.isDBusError(e))
+                return;
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e);
         }
@@ -530,6 +534,8 @@ var DBusClient = GObject.registerClass({
             return;
 
         this.EventAsync(id, event, params, timestamp, this._cancellable).catch(e => {
+            if (Util.isDBusError(e))
+                return;
             if (!e.matches(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                 logError(e);
         });
@@ -608,11 +614,11 @@ const MenuItemFactory = {
         MenuItemFactory._updateVisible.call(shellItem);
         MenuItemFactory._updateSensitive.call(shellItem);
 
-        // initially create children
-        if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem) {
-            dbusItem.getChildren().forEach(c =>
-                shellItem.menu.addMenuItem(MenuItemFactory.createItem(client, c)));
-        }
+        // A submenu's children stay unbuilt until it is opened. Clash Verge
+        // publishes the whole proxy list (thousands of nodes) in one menu;
+        // building that tree on the root open freezes the shell.
+        if (shellItem instanceof PopupMenu.PopupSubMenuMenuItem)
+            shellItem._childrenMaterialized = false;
 
         // Connect DBus signals explicitly without attaching to GObject 'destroy'.
         // We manage teardown explicitly when destroy() is invoked.
@@ -632,6 +638,13 @@ const MenuItemFactory = {
         shellItem._shellSignals.push([shellItem, activateId]);
 
         if (shellItem.menu) {
+            // PopupSubMenu.open() returns without a signal when the menu is
+            // empty, so the children have to exist before that check.
+            const origOpen = shellItem.menu.open.bind(shellItem.menu);
+            shellItem.menu.open = animate => {
+                MenuItemFactory._materializeChildren.call(shellItem);
+                origOpen(animate);
+            };
             const openStateId = shellItem.menu.connect('open-state-changed',
                 MenuItemFactory._onOpenStateChanged.bind(shellItem));
             shellItem._shellSignals.push([shellItem.menu, openStateId]);
@@ -687,6 +700,19 @@ const MenuItemFactory = {
         };
 
         return shellItem;
+    },
+
+    _materializeChildren() {
+        if (this._destroyed || this._childrenMaterialized || !this.menu || !this._dbusItem)
+            return;
+
+        this._childrenMaterialized = true;
+        const children = this._dbusItem.getChildren();
+        for (let i = 0; i < children.length; i++) {
+            const child = children[i];
+            if (child)
+                this.menu.addMenuItem(MenuItemFactory.createItem(this._dbusClient, child));
+        }
     },
 
     _onOpenStateChanged(menu, open) {
@@ -762,6 +788,10 @@ const MenuItemFactory = {
 
     _onChildAdded(dbusItem, child, position) {
         if (this._destroyed || !this._dbusItem)
+            return;
+
+        // Not opened yet: getChildren() will build these on open.
+        if (this._childrenMaterialized === false)
             return;
 
         if (!(this instanceof PopupMenu.PopupSubMenuMenuItem)) {
